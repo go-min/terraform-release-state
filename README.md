@@ -185,3 +185,8 @@ until the API and integration tests are reviewed.
 The disposable integration workflow is manual-only. It creates a unique test
 Release and removes it in an `always()` cleanup step; it never uses the
 `terraform-state` production tag.
+
+Design records are available in [discovery](docs/discovery.md),
+[architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
+and the [preview API review](docs/api-review.md). They describe preview behavior
+only; no production migration is included.
