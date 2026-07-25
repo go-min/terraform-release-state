@@ -1,0 +1,83 @@
+name: Disposable integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: terraform-release-state-integration-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      STATE_TEST_TAG: terraform-state-integration-${{ github.run_id }}
+      STATE_TEST_PATH: test-state/terraform.tfstate
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: mkdir -p test-state
+
+      - name: Restore missing state with explicit bootstrap
+        id: restore-empty
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          bootstrap: "true"
+
+      - name: Create initial disposable state
+        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":1,"lineage":"integration"}' > "$STATE_TEST_PATH"
+
+      - name: Save bootstrapped state
+        id: save-initial
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          bootstrap: "true"
+          expected-remote-state-marker: ${{ steps.restore-empty.outputs.remote-state-marker }}
+          backup-retention: "1"
+
+      - name: Restore current state
+        id: restore-current
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+
+      - name: Simulate updated Terraform state
+        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
+
+      - name: Save updated state and create backup
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          expected-remote-state-marker: ${{ steps.restore-current.outputs.remote-state-marker }}
+          backup-retention: "1"
+
+      - name: Cleanup disposable release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "$STATE_TEST_TAG" --repo "$GITHUB_REPOSITORY" --yes
