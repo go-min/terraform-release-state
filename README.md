@@ -117,8 +117,7 @@ must call save with `if: always()` and preserve the restore marker.
 - The first milestone stores plain assets only; age encryption is not included.
 - Release assets are not an atomic or native Terraform backend.
 - Backup cleanup failure is reported after the current state has been verified.
-- Backup retention recognizes legacy `.metadata.txt` assets created by the
-  original `github-config` implementation and new `.metadata.json` assets.
+- Backup metadata uses the `.metadata.json` format.
 
 ## Development
 
@@ -134,7 +133,7 @@ pnpm build
 The implementation is split by responsibility:
 
 - `src/config.mts` parses and validates the action inputs;
-- `src/backups.mts` identifies backup assets and legacy metadata formats;
+- `src/backups.mts` identifies backup assets and metadata files;
 - `src/github-api.mts` contains the retrying GitHub Release/asset API adapter;
 - `src/marker.mts` owns checksums and optimistic-consistency markers;
 - `src/state-manager.mts` implements restore, save, backups, verification, and
