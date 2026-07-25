@@ -8,6 +8,8 @@ const {
   createRelease,
   getRelease,
   listAssets,
+  managedReleaseBody,
+  updateReleaseBody,
   uploadAsset,
 } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
@@ -275,6 +277,30 @@ test("createRelease documents the managed state without exposing its contents", 
   assert.match(body, /present only when the current state uses age encryption/);
   assert.match(body, /github\.com\/ter-sh\/terraform-release-state/);
   assert.doesNotMatch(body, /state-sha256|remote-state-marker|credentials/i);
+});
+
+test("updateReleaseBody updates the managed release description", async () => {
+  let request: Record<string, unknown> | undefined;
+  const octokit = {
+    rest: {
+      repos: {
+        updateRelease: async (options: Record<string, unknown>) => {
+          request = options;
+          return { data: { id: 12, body: String(options.body) } };
+        },
+      },
+    },
+  } as never;
+  const body = managedReleaseBody(
+    target,
+    "terraform-state",
+    "terraform.tfstate",
+  );
+
+  const result = await updateReleaseBody(octokit, target, 12, body);
+
+  assert.equal(result.id, 12);
+  assert.deepEqual(request, { ...target, release_id: 12, body });
 });
 
 test("uploadAsset reconciles an asset created before an ambiguous error", async () => {
