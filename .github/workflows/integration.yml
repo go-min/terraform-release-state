@@ -52,6 +52,10 @@ jobs:
           expected-remote-state-marker: ${{ steps.restore-empty.outputs.remote-state-marker }}
           backup-retention: "1"
 
+      - name: Require explicit bootstrap output
+        if: steps.save-initial.outputs.bootstrapped != 'true'
+        run: exit 1
+
       - name: Restore current state
         id: restore-current
         uses: ./

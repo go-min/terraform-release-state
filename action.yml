@@ -47,7 +47,7 @@ outputs:
   operation:
     description: Completed operation.
   bootstrapped:
-    description: Whether missing state storage was explicitly accepted.
+    description: Whether this operation explicitly created missing state storage.
   release-id:
     description: GitHub Release ID.
   state-asset-id:

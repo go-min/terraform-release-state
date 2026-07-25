@@ -7,7 +7,14 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
+import {
+  parseBoolean,
+  parseRepository,
+  parseRetention,
+  resolveStatePath,
+  validateReleaseComponent,
+} from "./validation.js";
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 type Release = Awaited<
@@ -66,43 +73,6 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-function bool(value: string, name: string): boolean {
-  if (value === "true") return true;
-  if (value === "false" || value === "") return false;
-  fail(`${name} must be true or false.`);
-}
-
-function retention(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1000) {
-    fail("backup-retention must be an integer from 0 through 1000.");
-  }
-  return parsed;
-}
-
-function repository(value: string): { owner: string; repo: string } {
-  const parts = value.split("/");
-  if (
-    parts.length !== 2 ||
-    parts.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part))
-  ) {
-    fail("state-repository must use the owner/name format.");
-  }
-  return { owner: parts[0], repo: parts[1] };
-}
-
-function statePath(value: string): string {
-  if (!value || value.includes("\0"))
-    fail("state-path must be a non-empty path.");
-  const workspace = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
-  const absolute = resolve(workspace, value);
-  const relativePath = relative(workspace, absolute);
-  if (isAbsolute(relativePath) || relativePath.startsWith("..")) {
-    fail("state-path must remain inside GITHUB_WORKSPACE.");
-  }
-  return absolute;
-}
-
 function sha256(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
@@ -148,6 +118,10 @@ function sameMarker(expected: Marker, actual: Asset): boolean {
     expected.size === actual.size &&
     expected.updatedAt === actual.updated_at
   );
+}
+
+function sameAssetMarker(left: Asset, right: Asset): boolean {
+  return marker(left) === marker(right);
 }
 
 async function getRelease(
@@ -273,10 +247,11 @@ function outputs(
   release: Release,
   asset: Asset | undefined,
   data: Buffer | undefined,
+  bootstrapped = false,
 ): void {
   core.setOutput("operation", operation);
   core.setOutput("release-id", release.id);
-  core.setOutput("bootstrapped", false);
+  core.setOutput("bootstrapped", bootstrapped);
   core.setOutput("remote-state-marker", marker(asset));
   if (asset) {
     core.setOutput("state-asset-id", asset.id);
@@ -295,12 +270,14 @@ async function restore(
   allowBootstrap: boolean,
 ): Promise<void> {
   let release = await getRelease(octokit, owner, repo, tag);
+  let bootstrapped = false;
   if (!release) {
     if (!allowBootstrap)
       fail(
         `State release ${tag} does not exist; set bootstrap=true explicitly.`,
       );
     release = await createRelease(octokit, owner, repo, tag);
+    bootstrapped = true;
   }
   const asset = findAsset(await assets(octokit, owner, repo, release.id), name);
   if (!asset) {
@@ -347,6 +324,7 @@ async function save(
   }
   let allAssets = await assets(octokit, owner, repo, release.id);
   let current = findAsset(allAssets, name);
+  let bootstrapped = false;
   if (!expected && current)
     fail(
       "save requires expected-remote-state-marker from restore when current state exists.",
@@ -363,6 +341,7 @@ async function save(
     fail("Remote state disappeared after restore; refusing to recreate it.");
   if (!current && !allowBootstrap && expected !== "absent")
     fail("Current state is missing; refusing implicit bootstrap.");
+  bootstrapped = !current && allowBootstrap;
 
   let previous: Buffer | undefined;
   let backupName = "";
@@ -387,6 +366,15 @@ async function save(
       "application/json",
     );
   }
+  const latest = findAsset(
+    await assets(octokit, owner, repo, release.id),
+    name,
+  );
+  if (current && (!latest || !sameAssetMarker(current, latest)))
+    fail("Remote state changed during save; refusing to overwrite it.");
+  if (!current && latest)
+    fail("Remote state appeared during save; refusing to overwrite it.");
+  current = latest;
   if (current) await remove(octokit, owner, repo, current.id);
   try {
     await upload(octokit, owner, repo, release.id, name, data);
@@ -417,7 +405,7 @@ async function save(
     const metadata = findAsset(allAssets, `${backup.name}.metadata.json`);
     if (metadata) await remove(octokit, owner, repo, metadata.id);
   }
-  outputs("save", release, current, data);
+  outputs("save", release, current, data, bootstrapped);
   core.setOutput("backup-asset-name", backupName);
   core.setOutput("backup-count", Math.min(backups.length, keep));
 }
@@ -430,7 +418,7 @@ async function run(): Promise<void> {
     .toLowerCase();
   if (operation !== "restore" && operation !== "save")
     fail("operation must be restore or save.");
-  const target = repository(
+  const target = parseRepository(
     core.getInput("state-repository") || process.env.GITHUB_REPOSITORY || "",
   );
   const tag = core.getInput("release-tag");
@@ -440,9 +428,14 @@ async function run(): Promise<void> {
     !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)
   )
     fail("release-tag and state-asset contain unsupported characters.");
-  const path = statePath(core.getInput("state-path", { required: true }));
-  const allowBootstrap = bool(core.getInput("bootstrap"), "bootstrap");
-  const keep = retention(core.getInput("backup-retention"));
+  validateReleaseComponent(tag, "release-tag");
+  validateReleaseComponent(name, "state-asset");
+  const path = resolveStatePath(
+    core.getInput("state-path", { required: true }),
+    resolve(process.env.GITHUB_WORKSPACE || process.cwd()),
+  );
+  const allowBootstrap = parseBoolean(core.getInput("bootstrap"), "bootstrap");
+  const keep = parseRetention(core.getInput("backup-retention"));
   const octokit = github.getOctokit(token);
   if (operation === "restore") {
     await restore(

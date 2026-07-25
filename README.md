@@ -68,6 +68,17 @@ Missing state fails closed by default.
 - `backup-retention`: defaults to `20`, maximum `1000`;
 - `source-commit` and `workflow-run-id`: optional recovery metadata.
 
+## Outputs
+
+- `remote-state-marker`: opaque restore marker that must be passed to `save`;
+- `bootstrapped`: `true` when the operation explicitly created missing state
+  storage;
+- `state-sha256`: checksum of the local state file;
+- `state-asset-id` and `release-id`: GitHub identifiers for diagnostics;
+- `backup-asset-name` and `backup-count`: save results.
+
+The action never returns state content, tokens, or keys as outputs.
+
 ## Behavior and recovery
 
 The action verifies downloaded state against the GitHub asset digest when one is
@@ -115,3 +126,7 @@ npm run build
 The generated `dist/` bundle must be committed with action changes. Consumers
 should pin the action to an immutable commit SHA. Stable `v1` will not be created
 until the API and integration tests are reviewed.
+
+The disposable integration workflow is manual-only. It creates a unique test
+Release and removes it in an `always()` cleanup step; it never uses the
+`terraform-state` production tag.
