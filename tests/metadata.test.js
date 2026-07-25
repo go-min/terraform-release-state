@@ -1,17 +1,19 @@
 const fs = require("node:fs");
+const { describe, it } = require("node:test");
+const assert = require("node:assert/strict");
 
 describe("action metadata", () => {
   const metadata = fs.readFileSync("action.yml", "utf8");
 
-  test("uses the Node 24 runtime and compiled bundle", () => {
-    expect(metadata).toContain("using: node24");
-    expect(metadata).toContain("main: dist/index.js");
+  it("uses the Node 24 runtime and compiled bundle", () => {
+    assert.match(metadata, /using: node24/);
+    assert.match(metadata, /main: dist\/index\.js/);
   });
 
-  test("exposes the stable restore/save API", () => {
-    expect(metadata).toContain("operation:");
-    expect(metadata).toContain("expected-remote-state-marker:");
-    expect(metadata).toContain("backup-retention:");
-    expect(metadata).toContain("remote-state-marker:");
+  it("exposes the stable restore/save API", () => {
+    assert.match(metadata, /operation:/);
+    assert.match(metadata, /expected-remote-state-marker:/);
+    assert.match(metadata, /backup-retention:/);
+    assert.match(metadata, /remote-state-marker:/);
   });
 });
