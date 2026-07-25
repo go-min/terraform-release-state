@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { core, fail } from "./action-core.mjs";
 import { isBackupAsset, metadataAssetNames } from "./backups.mjs";
 import {
@@ -18,6 +18,8 @@ import {
   sha256,
 } from "./marker.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
+import { writeStateFile } from "./state-files.mjs";
+import { backupName } from "./backup-names.mjs";
 
 function emitOutputs(
   operation: string,
@@ -85,17 +87,8 @@ export async function restore(context: StateManagerContext): Promise<void> {
     return;
   }
   const data = await downloadAsset(octokit, config.target, asset);
-  writeFileSync(config.statePath, data, { mode: 0o600 });
-  chmodSync(config.statePath, 0o600);
+  writeStateFile(config.statePath, data);
   emitOutputs("restore", release, asset, data);
-}
-
-function backupName(assetName: string, runId: string): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-  return `${assetName}.backup-${timestamp}-${runId || process.env.GITHUB_RUN_ID || "local"}`;
 }
 
 async function createBackup(

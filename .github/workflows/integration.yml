@@ -25,6 +25,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Run mocked API failure coverage
+        run: node --experimental-strip-types --test tests/github-api.test.mts tests/reset.test.mts
       - run: mkdir -p test-state
 
       - name: Restore missing state with explicit bootstrap
@@ -120,6 +122,70 @@ jobs:
           state-path: ${{ env.STATE_TEST_PATH }}
           expected-remote-state-marker: ${{ steps.restore-after-conflict.outputs.remote-state-marker }}
           backup-retention: "1"
+
+      - name: Restore state for retention rollover
+        id: restore-retention
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+
+      - name: Prepare second updated disposable state
+        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":3,"lineage":"integration"}' > "$STATE_TEST_PATH"
+
+      - name: Save second state and enforce backup retention
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          expected-remote-state-marker: ${{ steps.restore-retention.outputs.remote-state-marker }}
+          backup-retention: "1"
+
+      - name: Assert one current backup remains after retention
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          backup_count=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '[.assets[] | select(.name | startswith("terraform.tfstate.backup-")) | select(.name | endswith(".metadata.json") | not)] | length')
+          test "$backup_count" -eq 1
+
+      - name: Add unrelated asset to test reset fail-closed behavior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' integration-only > test-state/unrelated.txt
+          gh release upload "$STATE_TEST_TAG" test-state/unrelated.txt --repo "$GITHUB_REPOSITORY"
+
+      - name: Assert reset refuses an unexpected asset
+        id: reset-guard
+        continue-on-error: true
+        uses: ./
+        with:
+          operation: reset
+          confirmation: RESET
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-asset: terraform.tfstate
+
+      - name: Require reset guard failure
+        if: steps.reset-guard.outcome != 'failure'
+        run: exit 1
+
+      - name: Remove integration-only unrelated asset
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "unrelated.txt") | .id' || true)
+          if [ -n "$asset_id" ]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          fi
 
       - name: Reset disposable state
         if: success()
