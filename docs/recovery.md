@@ -1,71 +1,78 @@
 # Recovery and reset
 
-This action does not run Terraform or decide whether infrastructure should be
-recreated. The consumer workflow owns approvals, concurrency, credentials, and
-the decision to restore or reset state.
+Recovery is an operator decision. The action does not infer that missing or
+corrupt state is safe to recreate, import resources, or run Terraform.
+
+## Failure guide
+
+| Failure                                | Safe response                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| Release or current asset is missing    | Investigate deletion/access; bootstrap only after explicit approval         |
+| Integrity or metadata validation fails | Stop Terraform; verify the latest complete backup pair and encryption key   |
+| Remote marker changed after restore    | Do not overwrite; rerun from restore after the competing writer is resolved |
+| Save reports successful recovery       | Remote state was restored; investigate the failed replacement before retry  |
+| Automatic recovery also fails          | Preserve local state and inspect current/backup assets before any mutation  |
+| Retention or reset partially fails     | Retry the same operation; deletes are idempotent                            |
+
+Never restore an older backup over a newer local state produced by a partially
+successful `terraform apply`. Persist the newer local state first when its
+lineage and remote marker are valid.
 
 ## Reset contract
 
-Use `operation: reset` only for a disposable Release or an explicitly approved
-recovery. The action requires the exact value `confirmation: RESET` and
-fails before making API changes when confirmation is absent or different.
+Reset requires:
 
-Reset targets only the configured repository, Release tag, current state asset,
-its current `.metadata.json` record when encrypted, backup assets, and matching
-`.metadata.json` files. It first lists all Release assets and refuses to proceed
-if an unexpected asset is present. This prevents an accidentally shared Release
-from being deleted.
+- `operation: reset`;
+- exact `confirmation: RESET`;
+- Contents write access to the configured state repository;
+- an operator-approved recovery or disposable test context.
 
-The deletion sequence is:
-
-1. list all assets with GitHub API pagination;
-2. delete the current state and backup assets;
-3. list assets again and stop if any appeared during deletion;
-4. delete the Release;
-5. delete the tag reference.
-
-Each delete treats HTTP 404 as already absent and retries transient API errors.
-If a later delete fails, rerun the same confirmed reset. Already-deleted assets
-are skipped and the remaining Release/tag resources are cleaned up.
-
-## Clean bootstrap after reset
-
-After reset, run restore with `bootstrap: true` in an approved workflow. If the
-Release and state asset are absent, restore creates the empty state storage
-boundary and returns `remote-state-marker: absent`. It does not import resources
-or create infrastructure. Terraform can then create the initial local state,
-which must be persisted with a subsequent `save`.
+Before deletion, the action lists every Release asset and refuses a Release
+containing anything outside the configured state namespace. It then deletes
+state assets, rechecks the Release, deletes the Release, and deletes its tag.
+HTTP `404` is treated as already absent, so the operation is safe to retry after
+partial completion.
 
 ```yaml
-- name: Reset approved disposable state
+- name: Reset approved state storage
   uses: ter-sh/terraform-release-state@<commit-sha>
   with:
     operation: reset
     confirmation: RESET
     github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: ter-sh/terraform-release-state
-    release-tag: terraform-state-test
+    state-repository: ter-sh/state-repository
+    release-tag: terraform-state-recovery
+```
 
-- name: Recreate clean state storage
-  id: restore-empty
+Do not expose `confirmation` as an unreviewed workflow input. Use a protected
+environment or equivalent approval boundary for non-disposable state.
+
+## Clean bootstrap after reset
+
+After reset, restore with explicit bootstrap. This creates the empty Release
+boundary and returns `remote-state-marker: absent`; it does not create
+infrastructure or state content.
+
+```yaml
+- name: Bootstrap clean state storage
+  id: state
   uses: ter-sh/terraform-release-state@<commit-sha>
   with:
     operation: restore
     bootstrap: "true"
     github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: ter-sh/terraform-release-state
-    release-tag: terraform-state-test
+    state-repository: ter-sh/state-repository
+    release-tag: terraform-state-recovery
     state-path: terraform.tfstate
 ```
 
-## Production safeguards
+Run Terraform only after reviewing why the previous state was reset. Persist
+the resulting local state with `save` and
+`expected-remote-state-marker: ${{ steps.state.outputs.remote-state-marker }}`.
 
-- Do not use reset as an automatic response to a missing or corrupt state.
-- For encrypted state, retain an age identity capable of decrypting every
-  backup through the configured retention window; a missing identity is not
-  recoverable through GitHub access alone.
-- Keep Terraform and reset jobs in separate approval paths.
-- Use a short-lived GitHub App installation token where possible.
-- Keep the consumer workflow's concurrency group with
-  `cancel-in-progress: false`.
-- Do not use the production `terraform-state` tag in integration tests.
+## Encrypted recovery
+
+GitHub access cannot recover age-encrypted state without a matching identity.
+Retain every old identity until all backups encrypted for it have expired or
+been intentionally removed. Test a new identity before removing an old
+recipient from subsequent saves.

@@ -1,23 +1,30 @@
 # Security policy
 
-Do not report vulnerabilities publicly. Open a private security advisory or
-contact the organization owner with reproduction details and no credentials or
-state contents.
+## Reporting a vulnerability
 
-The action never logs state or credentials and does not expose state through
-outputs. Consumers must provide the minimum token scope needed by the operation:
-Contents read for restore and Contents write for save, backup, retention, and
-reset. Reset also deletes the configured Release tag.
+Do not open a public issue. Use a private GitHub security advisory or contact
+the organization owner. Include reproduction steps and affected versions, but
+never include real Terraform state, credentials, tokens, or private keys.
 
-The action does not provide locking. Consumer workflows must use a shared
-concurrency group with `cancel-in-progress: false`.
+Only the latest repository state is maintained. Security fixes may require
+consumers to update their pinned commit SHA.
 
-For `encryption: age`, store `age-identities` only in GitHub Actions secrets or
-an external secret manager. The action masks the input and never writes or
-returns identities. Do not use passphrases, repository variables, artifacts, or
-command-line arguments for private key material.
+## Operational requirements
 
-The repository pins direct package versions and GitHub Actions to immutable
-commit SHAs. Pull requests receive dependency review, and the repository runs
-CodeQL analysis on push, pull request, and a weekly schedule. Dependabot keeps
-the pinned versions and action SHAs current through reviewed pull requests.
+- Grant Contents read for normal restore and Contents write only for bootstrap,
+  save, and reset.
+- Prefer short-lived GitHub App installation tokens for cross-repository access.
+- Do not use a classic PAT as the primary production credential.
+- Keep `age-identities` in GitHub Actions secrets or an external secret manager.
+- Use workflow concurrency with `cancel-in-progress: false`.
+- Protect reset and recovery workflows with an approval boundary.
+- Never upload state to logs, outputs, artifacts, or caches.
+
+See the [threat model](docs/threat-model.md) for trust boundaries, controls, and
+residual risks.
+
+## Supply chain
+
+Runtime packages and GitHub Actions are pinned. CI runs dependency review,
+CodeQL, production dependency audit, unit tests, and bundle synchronization.
+Dependabot proposes reviewed package and action updates.

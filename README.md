@@ -1,240 +1,261 @@
 # Terraform Release State
 
-Store, restore, verify, and back up Terraform state using GitHub Release assets.
+[![Check](https://github.com/ter-sh/terraform-release-state/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/ter-sh/terraform-release-state/actions/workflows/check.yml)
+[![Disposable integration](https://github.com/ter-sh/terraform-release-state/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/ter-sh/terraform-release-state/actions/workflows/integration.yml)
+[![Security](https://github.com/ter-sh/terraform-release-state/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/ter-sh/terraform-release-state/actions/workflows/security.yml)
+[![Node.js 24](https://img.shields.io/badge/runtime-Node.js%2024-339933?logo=nodedotjs&logoColor=white)](action.yml)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> [!NOTE]
-> This project is maintained primarily for the organization's own use and
-> shared as-is. It has no public support, roadmap, or response-time
-> commitments. Forks are welcome for different workflows or priorities.
-> **This is not a native Terraform backend.** The action provides Terraform
-> state storage through GitHub Release assets. The consumer workflow remains
-> responsible for concurrency locking, Terraform execution, credentials, and
-> protected environments.
+Store, restore, verify, encrypt, and back up Terraform state with GitHub Release
+assets.
 
-## Status
+> [!IMPORTANT]
+> This action is not a native Terraform backend. It does not run Terraform or
+> provide locking. The consumer workflow remains responsible for Terraform
+> execution, concurrency, credentials, approvals, and protected environments.
 
-This repository is a preview action. It supports plain state assets by default
-and opt-in `age` encryption for new, dedicated state storage.
+## What it provides
 
-## Usage
+- explicit `restore`, `save`, and `reset` operations;
+- fail-closed bootstrap and integrity validation;
+- optimistic consistency protection against stale writes;
+- paired backups with checksums and configurable retention;
+- recovery after a partially failed state replacement;
+- optional `age` encryption with native X25519 recipients;
+- same-repository and cross-repository state storage;
+- no Terraform state, token, or private key outputs.
 
-Restore before Terraform runs, then pass the restore marker to save. The marker
-prevents a later save from silently overwriting state changed by another
-process.
+GitHub Releases provide a repository-scoped asset store with permissions,
+checksums, and recovery-friendly immutable backup names. They do not provide
+Terraform's native locking or transactional backend semantics.
+
+## Quick start
+
+Pin the action to an immutable commit SHA. Restore before Terraform runs and
+save with `if: always()` so state produced by a partially successful apply is
+still persisted.
 
 ```yaml
 permissions:
   contents: write
 
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
+
 steps:
-  - uses: actions/checkout@v5
+  - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
   - name: Restore Terraform state
-    id: state-restore
+    id: state
     uses: ter-sh/terraform-release-state@<commit-sha>
     with:
       operation: restore
-      github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-      state-repository: ter-sh/terraform-release-state
+      github-token: ${{ github.token }}
       state-path: terraform.tfstate
 
   - name: Terraform apply
     run: terraform apply -input=false tfplan
 
   - name: Save Terraform state
-    if: always()
+    if: always() && steps.state.outcome == 'success'
     uses: ter-sh/terraform-release-state@<commit-sha>
     with:
       operation: save
-      github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-      state-repository: ter-sh/terraform-release-state
+      github-token: ${{ github.token }}
       state-path: terraform.tfstate
-      expected-remote-state-marker: ${{ steps.state-restore.outputs.remote-state-marker }}
+      expected-remote-state-marker: ${{ steps.state.outputs.remote-state-marker }}
       source-commit: ${{ github.sha }}
       workflow-run-id: ${{ github.run_id }}
 ```
 
-Use `bootstrap: 'true'` only for explicit initial state creation or an approved
-recovery procedure. It does not run Terraform import or create infrastructure.
-Missing state fails closed by default.
+The default storage location is the current repository, Release tag
+`terraform-state`, and asset `terraform.tfstate`.
 
-## Inputs
+Every workflow in the consumer repository that writes this asset must use the
+same concurrency group. Concurrency groups do not coordinate across different
+repositories; cross-repository writers rely on the action's consistency check
+to reject stale saves and should be operationally serialized where possible.
 
-- `operation`: required, `restore`, `save`, or `reset`;
-- `github-token`: required token with Contents access to the state repository;
-- `state-repository`: defaults to `GITHUB_REPOSITORY`;
-- `release-tag`: defaults to `terraform-state`;
-- `state-asset`: defaults to `terraform.tfstate`;
-- `state-path`: required for `restore` and `save`, workspace-relative local path;
-- `bootstrap`: defaults to `false`;
-- `expected-remote-state-marker`: restore output passed to save;
-- `backup-retention`: defaults to `20`, maximum `1000`;
-- `source-commit` and `workflow-run-id`: optional recovery metadata.
-- `confirmation`: must be exactly `RESET` when `operation: reset`.
-- `encryption`: `none` (default) or `age`;
-- `age-recipients`: newline-delimited `age1...` public recipients, required to
-  save with `encryption: age`;
-- `age-identities`: secret newline-delimited `AGE-SECRET-KEY-1...` identities,
-  required to restore with `encryption: age`.
+## Lifecycle
 
-## Outputs
+### Restore
 
-- `remote-state-marker`: opaque restore marker that must be passed to `save`;
-- `bootstrapped`: `true` when the operation explicitly created missing state
-  storage;
-- `state-sha256`: checksum of the local state file;
-- `state-asset-id` and `release-id`: GitHub identifiers for diagnostics;
-- `backup-asset-name` and `backup-count`: save results.
-- `reset-deleted-asset-count` and `reset-release-found`: reset results.
+Restore downloads the current asset, verifies its GitHub digest and encryption
+metadata when present, decrypts it when configured, and writes the local state
+with mode `0600`. Missing or invalid state fails without changing the local
+file.
 
-The action never returns state content, tokens, or keys as outputs.
-
-## Reset
-
-Reset is a destructive, explicitly confirmed operation for disposable or
-approved recovery workflows. It deletes only the configured state Release's
-current asset, `state-asset.backup-*` assets (including their `.metadata.json`
-files), the Release, and its tag. It never runs Terraform or uses the `gh` CLI.
-
-The action first lists every asset in the target Release. If any asset is
-outside the configured current-state and backup namespace, reset fails before
-deleting anything. A missing Release or tag is treated as already reset, so the
-operation is safe to retry after a partial failure.
+Initial storage creation is explicit:
 
 ```yaml
-- name: Reset disposable Terraform state
-  uses: ter-sh/terraform-release-state@<commit-sha>
-  with:
-    operation: reset
-    confirmation: RESET
-    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: ter-sh/terraform-release-state
-    release-tag: terraform-state-test
-    state-asset: terraform.tfstate
+with:
+  operation: restore
+  bootstrap: "true"
 ```
 
-Never expose `confirmation` as an unreviewed or user-controlled free-form
-input. Use a protected workflow/environment for production recovery.
+Use bootstrap only for first-time setup or an approved recovery. A permission
+or API error is never interpreted as missing state.
 
-## Behavior and recovery
+### Save
 
-The action verifies downloaded state against the GitHub asset digest when one is
-available and always computes a local SHA-256. Before save it checks the remote
-asset marker captured by restore. A mismatch fails without overwriting remote
-state.
+Save requires the opaque marker returned by restore whenever current state
+exists. Before replacement, it checks the marker again, creates a backup and
+JSON metadata pair, uploads the new state, downloads it for verification, and
+applies retention. A remote change aborts the save instead of using
+last-write-wins.
 
-Save creates a timestamped backup and metadata asset before replacing the current
-asset. It verifies the uploaded asset by downloading it again. The action tries
-to restore the previous current asset if replacement upload fails, but GitHub
-Release asset replacement is not atomic; inspect the latest backup if recovery
-also fails.
+GitHub Release asset replacement is not atomic. If replacement fails, the
+action restores the previous state when it can prove no concurrent writer has
+changed the target. Otherwise it fails with recovery context.
 
-The action can persist a state file after a failed Terraform step. The consumer
-must call save with `if: always()` and preserve the restore marker.
+### Reset
+
+Reset is destructive and requires the exact confirmation `RESET`. It audits the
+target Release before deleting only the configured current state, metadata,
+backups, Release, and tag. Unexpected assets stop the operation before the
+Release is removed. Missing resources are treated as already reset.
+
+See [Recovery and reset](docs/recovery.md) for the procedure and clean bootstrap
+sequence.
 
 ## Encryption
 
-`encryption: age` stores binary age ciphertext in the configured state asset
-and a versioned `<state-asset>.metadata.json` record. The current asset and its
-backups remain ciphertext; Terraform receives plaintext only at the configured
-local `state-path`. The action never writes identities to disk or emits them in
-outputs.
-
-Use a fresh Release tag for the encrypted preview. Existing plain storage is
-not migrated automatically, and an encrypted asset with missing or incompatible
-metadata fails closed. Encrypt to one or more native X25519 recipients; provide
-the corresponding identities only as GitHub Actions secrets.
+Set `encryption: age` to store ciphertext while Terraform continues to use the
+plaintext file at `state-path`.
 
 ```yaml
-- name: Save encrypted Terraform state
-  if: always()
-  uses: ter-sh/terraform-release-state@<commit-sha>
-  with:
-    operation: save
-    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-path: terraform.tfstate
-    expected-remote-state-marker: ${{ steps.state-restore.outputs.remote-state-marker }}
-    encryption: age
-    age-recipients: ${{ vars.TF_STATE_AGE_RECIPIENTS }}
+# Restore
+encryption: age
+age-identities: ${{ secrets.TF_STATE_AGE_IDENTITIES }}
 
-- name: Restore encrypted Terraform state
-  id: state-restore
-  uses: ter-sh/terraform-release-state@<commit-sha>
-  with:
-    operation: restore
-    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-path: terraform.tfstate
-    encryption: age
-    age-identities: ${{ secrets.TF_STATE_AGE_IDENTITIES }}
+# Save
+encryption: age
+age-recipients: ${{ vars.TF_STATE_AGE_RECIPIENTS }}
 ```
 
-For key rotation, save once with old and new recipients, verify restore with the
-new identity, then save with only the new recipient. Keep the old identity until
-all retained backups are no longer needed.
+Only native X25519 `age1...` recipients and
+`AGE-SECRET-KEY-1...` identities are supported. Passphrases, SSH keys, plugins,
+and automatic plain/encrypted migrations are not supported. Use a dedicated
+Release tag for new encrypted storage.
 
-For reset recovery steps and partial deletion handling, see
-[docs/recovery.md](docs/recovery.md).
+For rotation, save once with old and new recipients, verify restore with the
+new identity, then save with only the new recipient. Retain the old identity
+until every backup encrypted for it is outside the retention window.
+
+## Cross-repository storage
+
+Set `state-repository: owner/name` and provide a token scoped to that repository.
+The workflow's default `GITHUB_TOKEN` normally cannot write to another
+repository. Prefer a short-lived GitHub App installation token; do not use a
+classic PAT as the primary production credential.
+
+Minimum token permissions:
+
+| Operation           | Repository permission |
+| ------------------- | --------------------- |
+| `restore`           | Contents: read        |
+| `restore` bootstrap | Contents: write       |
+| `save`              | Contents: write       |
+| `reset`             | Contents: write       |
+
+## Inputs
+
+| Input                          | Default             | Description                                                         |
+| ------------------------------ | ------------------- | ------------------------------------------------------------------- |
+| `operation`                    | required            | `restore`, `save`, or `reset`                                       |
+| `github-token`                 | required            | Token with access to the state repository                           |
+| `state-repository`             | current repository  | Repository in `owner/name` format                                   |
+| `release-tag`                  | `terraform-state`   | Dedicated state Release tag                                         |
+| `state-asset`                  | `terraform.tfstate` | Current state asset name                                            |
+| `state-path`                   | —                   | Workspace-relative file path; required for restore/save             |
+| `bootstrap`                    | `false`             | Explicitly allow missing storage creation                           |
+| `expected-remote-state-marker` | empty               | Marker returned by restore and required for updating existing state |
+| `backup-retention`             | `20`                | Number of backup pairs to retain, from `0` through `1000`           |
+| `source-commit`                | empty               | Commit SHA recorded in backup metadata                              |
+| `workflow-run-id`              | empty               | Workflow run ID recorded in backup metadata                         |
+| `confirmation`                 | empty               | Must equal `RESET` for reset                                        |
+| `encryption`                   | `none`              | `none` or `age`                                                     |
+| `age-recipients`               | empty               | Newline-delimited public recipients required for encrypted save     |
+| `age-identities`               | empty               | Secret newline-delimited identities required for encrypted restore  |
+
+## Outputs
+
+| Output                      | Description                                    |
+| --------------------------- | ---------------------------------------------- |
+| `operation`                 | Completed operation                            |
+| `bootstrapped`              | Whether missing storage was explicitly created |
+| `release-id`                | Target GitHub Release ID                       |
+| `state-asset-id`            | Current state asset ID, when present           |
+| `remote-state-marker`       | Opaque marker passed from restore to save      |
+| `state-digest`              | SHA-256 digest of the stored asset             |
+| `state-sha256`              | SHA-256 checksum of the local state file       |
+| `backup-asset-name`         | Backup created by save, when applicable        |
+| `backup-count`              | Retained complete backup pairs                 |
+| `reset-deleted-asset-count` | Assets deleted by reset                        |
+| `reset-release-found`       | Whether reset found the target Release         |
+
+The action never returns state content, credentials, or encryption keys.
+
+## Storage layout
+
+```text
+terraform.tfstate
+terraform.tfstate.metadata.json                  # encrypted state only
+terraform.tfstate.backup-<timestamp>-<run>-<uuid>
+terraform.tfstate.backup-<timestamp>-<run>-<uuid>.metadata.json
+```
+
+Backup metadata records the timestamp, source commit, workflow run ID, action
+version, current asset name, encryption mode, and stored-asset checksum. Only
+`.metadata.json` is supported.
+
+## Failure behavior
+
+The action fails closed for:
+
+- missing storage without explicit bootstrap;
+- invalid inputs or unsafe paths;
+- missing, malformed, or mismatched encryption metadata;
+- checksum or upload verification failures;
+- remote state changes after restore;
+- unexpected assets during reset;
+- authentication and permission errors.
+
+Transient reads and deletes use bounded retries. Create and upload ambiguity is
+resolved by inspecting the remote resource rather than blindly repeating a
+non-idempotent request.
 
 ## Security
 
-- State content and credentials are never logged or returned as outputs.
-- Paths are restricted to real, non-symlink directories inside `GITHUB_WORKSPACE`.
-- The action does not create plaintext recovery files.
-- Use a short-lived GitHub App installation token where possible.
-- For cross-repository storage, the token needs access to the state repository.
-- The consumer workflow must provide `concurrency` with
-  `cancel-in-progress: false`.
-- Do not use a classic PAT as the primary production credential.
+> [!WARNING]
+> Never store plaintext Terraform state in a public repository. GitHub Release
+> assets inherit repository visibility. Use a dedicated private state
+> repository for production, including when encryption is enabled.
 
-## Limitations
+The action masks tokens and multiline age identities, escapes workflow-command
+errors, restricts state paths to real workspace directories, and never returns
+state or keys through outputs. Protect destructive recovery with an approval
+boundary and grant only the permissions required by each operation.
 
-- The action does not run Terraform or provide state locking by itself.
-- Encryption supports native X25519 age recipients only; passphrases, SSH keys,
-  plugins, and automatic plain/encrypted migrations are unsupported.
-- Release assets are not an atomic or native Terraform backend.
-- Backup cleanup failure is reported after the current state has been verified.
-- Backup metadata uses the `.metadata.json` format.
+See the [security policy](SECURITY.md) and [threat model](docs/threat-model.md)
+for operational requirements and residual risks.
 
-## Development
+## Project status
 
-```bash
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test
-pnpm format:check
-pnpm lint
-pnpm build
-```
+The action is pre-`v1`; its API is not yet stable. It is not published in the
+GitHub Marketplace. Consumers should pin a reviewed commit SHA. Stable `v1`
+requires an API review and successful disposable integration coverage.
 
-The implementation is split by responsibility:
+> [!NOTE]
+> This project is maintained primarily for the organization's own use and
+> shared as-is. It has no public support, roadmap, or response-time
+> commitments. Forks are welcome for different workflows or priorities.
 
-- `src/config.mts` parses and validates the action inputs;
-- `src/asset-names.mts` owns current, backup, and metadata asset names;
-- `src/backup-manager.mts` creates and retains backup assets;
-- `src/github-api.mts` contains the retrying GitHub Release/asset API adapter;
-- `src/integrity.mts` owns asset digests and checksums;
-- `src/marker.mts` owns optimistic-consistency markers;
-- `src/state-manager.mts` implements restore, save, verification, and recovery;
-- `src/action-core.mts` contains the small GitHub Actions runtime adapter;
-- `src/main.mts` is only the operation dispatcher.
+## Documentation
 
-Keep GitHub API calls in `src/github-api.mts`, state lifecycle decisions in
-`src/state-manager.mts`, and pure validation/checksum behavior independently
-testable. The native Node test runner covers pure logic; the disposable
-integration workflow covers the live Release API contract.
-
-The generated `dist/` bundle must be committed with action changes. Consumers
-should pin the action to an immutable commit SHA. Stable `v1` will not be created
-until the API and integration tests are reviewed.
-
-The disposable integration workflow runs after every push to `main` and can
-also be started manually. It creates a unique test Release and removes it in an
-`always()` cleanup step; it never uses the `terraform-state` production tag.
-
-Design records are available in [discovery](docs/discovery.md),
-[architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
-and the [preview API review](docs/api-review.md). They describe preview behavior
-only; no production migration is included.
-
-The action's security assumptions and residual risks are documented in the
-[threat model](docs/threat-model.md).
+- [Architecture](docs/architecture.md)
+- [Recovery and reset](docs/recovery.md)
+- [Threat model](docs/threat-model.md)
+- [Security policy](SECURITY.md)
+- [Development and contributing](CONTRIBUTING.md)
