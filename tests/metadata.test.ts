@@ -1,10 +1,10 @@
-const fs = require("node:fs");
+const { readFileSync } = require("node:fs");
+const { strict: assert } = require("node:assert");
 const { describe, it } = require("node:test");
-const assert = require("node:assert/strict");
+
+const metadata = readFileSync("action.yml", "utf8");
 
 describe("action metadata", () => {
-  const metadata = fs.readFileSync("action.yml", "utf8");
-
   it("uses the Node 24 runtime and compiled bundle", () => {
     assert.match(metadata, /using: node24/);
     assert.match(metadata, /main: dist\/index\.js/);
