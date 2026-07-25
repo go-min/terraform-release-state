@@ -37,7 +37,10 @@ test("restore refuses orphan current metadata even with bootstrap", async () => 
     ],
     rest: {
       repos: {
-        getReleaseByTag: async () => ({ data: { id: 1 } }),
+        getReleaseByTag: async () => ({ data: { id: 1, body: "" } }),
+        updateRelease: async ({ body }: { body: string }) => ({
+          data: { id: 1, body },
+        }),
         listReleaseAssets: "list",
       },
     },
@@ -62,7 +65,7 @@ test("save restores the previous current state when upload verification fails", 
   const next = Buffer.from("next-state");
   writeFileSync(statePath, next, { mode: 0o600 });
 
-  const release = { id: 1 } as never;
+  const release = { id: 1, body: "" };
   let nextAssetId = 10;
   const payloads = new Map<number, Buffer>([[1, previous]]);
   type FakeAsset = {
@@ -97,6 +100,9 @@ test("save restores the previous current state when upload verification fails", 
     rest: {
       repos: {
         getReleaseByTag: async () => ({ data: release }),
+        updateRelease: async ({ body }: { body: string }) => ({
+          data: { ...release, body },
+        }),
         listReleaseAssets: "list",
         deleteReleaseAsset: async ({ asset_id }: { asset_id: number }) => {
           assets = assets.filter((asset) => asset.id !== asset_id);

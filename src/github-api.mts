@@ -100,15 +100,14 @@ export async function getRelease(
   }
 }
 
-export async function createRelease(
-  octokit: Octokit,
+export function managedReleaseBody(
   target: RepositoryTarget,
   tag: string,
   assetName: string,
-): Promise<Release> {
+): string {
   const repository = `${target.owner}/${target.repo}`;
   const actionUrl = "https://github.com/ter-sh/terraform-release-state";
-  const body = `> [!CAUTION]
+  return `> [!CAUTION]
 > **Service release for Terraform state; do not delete.**
 >
 > Deleting or manually replacing this release or its assets can cause state loss and consistency failures.
@@ -124,6 +123,31 @@ export async function createRelease(
 The current state asset is authoritative. If it is absent, this storage has been bootstrapped and is awaiting its first save. Backups are retained only for recovery. The action validates asset integrity and refuses stale writes through optimistic consistency checks.
 
 Managed by [Terraform Release State](${actionUrl}). See the [documentation](${actionUrl}#readme) and [recovery guide](${actionUrl}/blob/main/docs/recovery.md) before changing any asset manually.`;
+}
+
+export async function updateReleaseBody(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  releaseId: number,
+  body: string,
+): Promise<Release> {
+  const response = await retry(() =>
+    octokit.rest.repos.updateRelease({
+      ...target,
+      release_id: releaseId,
+      body,
+    }),
+  );
+  return response.data;
+}
+
+export async function createRelease(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  tag: string,
+  assetName: string,
+): Promise<Release> {
+  const body = managedReleaseBody(target, tag, assetName);
 
   try {
     const response = await octokit.rest.repos.createRelease({

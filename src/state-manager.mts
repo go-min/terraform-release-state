@@ -10,6 +10,8 @@ import {
   findAsset,
   getRelease,
   listAssets,
+  managedReleaseBody,
+  updateReleaseBody,
   uploadAsset,
 } from "./github-api.mjs";
 import { assetDigest, sha256 } from "./integrity.mjs";
@@ -49,7 +51,11 @@ function emitOutputs(
 async function ensureRelease(context: StateManagerContext): Promise<Release> {
   const { octokit, config } = context;
   const existing = await getRelease(octokit, config.target, config.tag);
-  if (existing) return existing;
+  const body = managedReleaseBody(config.target, config.tag, config.assetName);
+  if (existing) {
+    if (existing.body === body) return existing;
+    return updateReleaseBody(octokit, config.target, existing.id, body);
+  }
   if (!config.bootstrap) {
     fail(
       `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
