@@ -44,6 +44,17 @@ test("outputs reject deprecated workflow syntax", () => {
   }
 });
 
+test("inputs accept shell-safe aliases for hyphenated names", () => {
+  const previous = process.env.INPUT_STATE_ASSET;
+  try {
+    process.env.INPUT_STATE_ASSET = "terraform.tfstate";
+    assert.equal(core.getInput("state-asset"), "terraform.tfstate");
+  } finally {
+    if (previous === undefined) delete process.env.INPUT_STATE_ASSET;
+    else process.env.INPUT_STATE_ASSET = previous;
+  }
+});
+
 test("multiline secrets are masked one line at a time", (context) => {
   const writes: string[] = [];
   context.mock.method(
@@ -64,9 +75,7 @@ test("multiline secrets are masked one line at a time", (context) => {
 
 test("failure messages cannot inject workflow commands", (context) => {
   const writes: string[] = [];
-  const previousActions = process.env.GITHUB_ACTIONS;
   const previousExitCode = process.exitCode;
-  process.env.GITHUB_ACTIONS = "true";
   context.mock.method(
     process.stderr,
     "write",
@@ -83,8 +92,6 @@ test("failure messages cannot inject workflow commands", (context) => {
     ]);
     assert.equal(process.exitCode, 1);
   } finally {
-    if (previousActions === undefined) delete process.env.GITHUB_ACTIONS;
-    else process.env.GITHUB_ACTIONS = previousActions;
     process.exitCode = previousExitCode;
   }
 });

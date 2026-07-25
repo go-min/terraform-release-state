@@ -106,16 +106,15 @@ jobs:
 
       - name: Assert remote consistency conflict
         env:
-          GITHUB_ACTIONS: "false"
           GITHUB_OUTPUT: ${{ runner.temp }}/expected-conflict-output
           INPUT_OPERATION: save
-          "INPUT_GITHUB-TOKEN": ${{ github.token }}
-          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
-          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
-          "INPUT_STATE-PATH": ${{ env.STATE_TEST_PATH }}
-          "INPUT_EXPECTED-REMOTE-STATE-MARKER": ${{ steps.restore-current.outputs.remote-state-marker }}
+          INPUT_GITHUB_TOKEN: ${{ github.token }}
+          INPUT_STATE_REPOSITORY: ${{ github.repository }}
+          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
+          INPUT_STATE_PATH: ${{ env.STATE_TEST_PATH }}
+          INPUT_EXPECTED_REMOTE_STATE_MARKER: ${{ steps.restore-current.outputs.remote-state-marker }}
         run: |
-          if node dist/index.js; then
+          if node dist/index.js 2> "$RUNNER_TEMP/expected-conflict-error"; then
             echo "Expected remote consistency conflict did not occur."
             exit 1
           fi
@@ -189,16 +188,15 @@ jobs:
 
       - name: Assert reset refuses an unexpected asset
         env:
-          GITHUB_ACTIONS: "false"
           GITHUB_OUTPUT: ${{ runner.temp }}/expected-reset-output
           INPUT_OPERATION: reset
-          "INPUT_CONFIRMATION": RESET
-          "INPUT_GITHUB-TOKEN": ${{ github.token }}
-          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
-          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
-          "INPUT_STATE-ASSET": terraform.tfstate
+          INPUT_CONFIRMATION: RESET
+          INPUT_GITHUB_TOKEN: ${{ github.token }}
+          INPUT_STATE_REPOSITORY: ${{ github.repository }}
+          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
+          INPUT_STATE_ASSET: terraform.tfstate
         run: |
-          if node dist/index.js; then
+          if node dist/index.js 2> "$RUNNER_TEMP/expected-reset-error"; then
             echo "Expected reset guard failure did not occur."
             exit 1
           fi
@@ -292,17 +290,16 @@ jobs:
       - name: Assert encrypted metadata integrity mismatch
         if: success()
         env:
-          GITHUB_ACTIONS: "false"
           GITHUB_OUTPUT: ${{ runner.temp }}/expected-integrity-output
           INPUT_OPERATION: restore
-          "INPUT_GITHUB-TOKEN": ${{ github.token }}
-          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
-          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
-          "INPUT_STATE-PATH": ${{ env.STATE_TEST_PATH }}
-          "INPUT_ENCRYPTION": age
-          "INPUT_AGE-IDENTITIES": ${{ env.STATE_TEST_AGE_IDENTITY }}
+          INPUT_GITHUB_TOKEN: ${{ github.token }}
+          INPUT_STATE_REPOSITORY: ${{ github.repository }}
+          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
+          INPUT_STATE_PATH: ${{ env.STATE_TEST_PATH }}
+          INPUT_ENCRYPTION: age
+          INPUT_AGE_IDENTITIES: ${{ env.STATE_TEST_AGE_IDENTITY }}
         run: |
-          if node dist/index.js; then
+          if node dist/index.js 2> "$RUNNER_TEMP/expected-integrity-error"; then
             echo "Expected encrypted metadata integrity mismatch did not occur."
             exit 1
           fi

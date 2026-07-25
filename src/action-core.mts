@@ -15,7 +15,8 @@ function commandValue(value: string): string {
 export const core = {
   getInput(name: string, options: { required?: boolean } = {}): string {
     const key = `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
-    const value = process.env[key] || "";
+    const shellSafeKey = key.replaceAll("-", "_");
+    const value = process.env[key] || process.env[shellSafeKey] || "";
     if (options.required && !value) fail(`${name} is required.`);
     return value.trim();
   },
@@ -47,11 +48,7 @@ export const core = {
   },
 
   setFailed(message: string): void {
-    if (process.env.GITHUB_ACTIONS === "true") {
-      process.stderr.write(`::error::${commandValue(message)}\n`);
-    } else {
-      process.stderr.write(`${message}\n`);
-    }
+    process.stderr.write(`::error::${commandValue(message)}\n`);
     process.exitCode = 1;
   },
 };
