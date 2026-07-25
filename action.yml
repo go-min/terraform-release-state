@@ -1,0 +1,70 @@
+name: Terraform Release State
+description: Store, restore, verify, and back up Terraform state using GitHub Release assets.
+author: ter-sh
+inputs:
+  operation:
+    description: "State operation: restore or save."
+    required: true
+  github-token:
+    description: Token with Contents read/write access to the state repository.
+    required: true
+  state-repository:
+    description: owner/name of the repository that stores the Release asset.
+    required: false
+    default: ""
+  release-tag:
+    description: GitHub Release tag used for state storage.
+    required: false
+    default: terraform-state
+  state-asset:
+    description: Current state asset filename.
+    required: false
+    default: terraform.tfstate
+  state-path:
+    description: Workspace-relative path for the local state file.
+    required: true
+  bootstrap:
+    description: Explicitly allow creation of missing state storage.
+    required: false
+    default: "false"
+  expected-remote-state-marker:
+    description: Marker returned by restore and passed to save for optimistic consistency.
+    required: false
+    default: ""
+  backup-retention:
+    description: Number of backup assets to retain.
+    required: false
+    default: "20"
+  source-commit:
+    description: Commit SHA written to backup metadata.
+    required: false
+    default: ""
+  workflow-run-id:
+    description: Workflow run ID written to backup metadata.
+    required: false
+    default: ""
+outputs:
+  operation:
+    description: Completed operation.
+  bootstrapped:
+    description: Whether missing state storage was explicitly accepted.
+  release-id:
+    description: GitHub Release ID.
+  state-asset-id:
+    description: Current state asset ID after the operation, when present.
+  remote-state-marker:
+    description: Opaque marker to pass from restore to save.
+  state-digest:
+    description: SHA-256 digest of the local state asset.
+  state-sha256:
+    description: SHA-256 checksum of the local state file.
+  backup-asset-name:
+    description: Backup asset created during save, when applicable.
+  backup-count:
+    description: Number of retained backup assets after save.
+runs:
+  using: node24
+  main: dist/index.js
+branding:
+  icon: database
+  color: blue
