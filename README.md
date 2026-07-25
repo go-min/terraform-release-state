@@ -117,6 +117,8 @@ must call save with `if: always()` and preserve the restore marker.
 - The first milestone stores plain assets only; age encryption is not included.
 - Release assets are not an atomic or native Terraform backend.
 - Backup cleanup failure is reported after the current state has been verified.
+- Backup retention recognizes legacy `.metadata.txt` assets created by the
+  original `github-config` implementation and new `.metadata.json` assets.
 
 ## Development
 
@@ -128,6 +130,22 @@ pnpm format:check
 pnpm lint
 pnpm build
 ```
+
+The implementation is split by responsibility:
+
+- `src/config.mts` parses and validates the action inputs;
+- `src/backups.mts` identifies backup assets and legacy metadata formats;
+- `src/github-api.mts` contains the retrying GitHub Release/asset API adapter;
+- `src/marker.mts` owns checksums and optimistic-consistency markers;
+- `src/state-manager.mts` implements restore, save, backups, verification, and
+  retention;
+- `src/action-core.mts` contains the small GitHub Actions runtime adapter;
+- `src/main.mts` is only the operation dispatcher.
+
+Keep GitHub API calls in `src/github-api.mts`, state lifecycle decisions in
+`src/state-manager.mts`, and pure validation/checksum behavior independently
+testable. The native Node test runner covers pure logic; the disposable
+integration workflow covers the live Release API contract.
 
 The generated `dist/` bundle must be committed with action changes. Consumers
 should pin the action to an immutable commit SHA. Stable `v1` will not be created
