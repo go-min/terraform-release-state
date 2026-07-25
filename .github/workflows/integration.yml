@@ -18,11 +18,14 @@ jobs:
       STATE_TEST_PATH: test-state/terraform.tfstate
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: mkdir -p test-state
 
       - name: Restore missing state with explicit bootstrap

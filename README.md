@@ -116,11 +116,11 @@ must call save with `if: always()` and preserve the restore marker.
 ## Development
 
 ```bash
-npm ci
-npm run typecheck
-npm test
-npm run format:check
-npm run build
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm format:check
+pnpm build
 ```
 
 The generated `dist/` bundle must be committed with action changes. Consumers

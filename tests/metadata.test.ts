@@ -1,6 +1,6 @@
-const { readFileSync } = require("node:fs");
-const { strict: assert } = require("node:assert");
-const { describe, it } = require("node:test");
+import { readFileSync } from "node:fs";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 
 const metadata = readFileSync("action.yml", "utf8");
 

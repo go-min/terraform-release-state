@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "GitHub Action for Terraform state storage using GitHub Release assets",
   "main": "dist/index.js",
+  "type": "module",
   "scripts": {
     "build": "ncc build src/main.ts --minify --source-map",
     "format": "prettier --write action.yml package.json src tests",
@@ -11,16 +12,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@actions/github": "^8.0.0"
+    "@actions/github": "^9.1.1"
   },
   "devDependencies": {
-    "@types/node": "^24.0.10",
-    "@vercel/ncc": "^0.38.3",
-    "prettier": "^3.6.2",
-    "typescript": "^5.8.3"
+    "@types/node": "^26.1.1",
+    "@vercel/ncc": "^0.44.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=24"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "packageManager": "pnpm@11.17.0"
 }
