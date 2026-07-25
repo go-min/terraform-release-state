@@ -1,7 +1,13 @@
 {
   "name": "terraform-release-state",
   "version": "0.1.0",
+  "private": true,
   "description": "GitHub Action for Terraform state storage using GitHub Release assets",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ter-sh/terraform-release-state.git"
+  },
+  "homepage": "https://github.com/ter-sh/terraform-release-state#readme",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -18,7 +24,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",
-    "@types/node": "26.1.1",
+    "@types/node": "24.13.3",
     "@vercel/ncc": "0.44.1",
     "markdownlint-cli2": "0.23.1",
     "prettier": "3.9.6",

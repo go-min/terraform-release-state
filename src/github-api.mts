@@ -6,12 +6,25 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const RETRYABLE_STATUSES = new Set([408, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETUNREACH",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 const MAX_RETRY_ATTEMPTS = 4;
 const MAX_RATE_LIMIT_DELAY_MS = 5 * 60 * 1000;
 
 type ApiError = {
+  code?: string;
   status?: number;
+  cause?: { code?: string };
   response?: {
     data?: { message?: string };
     headers?: Record<string, string | number | undefined>;
@@ -46,7 +59,11 @@ function rateLimitDelay(error: ApiError, attempt: number): number | undefined {
 
 function retryDelay(error: unknown, attempt: number): number | undefined {
   const apiError = error as ApiError;
-  if (RETRYABLE_STATUSES.has(apiError.status || 0)) {
+  const networkCode = apiError.code || apiError.cause?.code || "";
+  if (
+    RETRYABLE_STATUSES.has(apiError.status || 0) ||
+    RETRYABLE_NETWORK_CODES.has(networkCode)
+  ) {
     return 500 * 2 ** attempt;
   }
   if (apiError.status !== 403 && apiError.status !== 429) return undefined;

@@ -12,7 +12,8 @@ corrupt state is safe to recreate, import resources, or run Terraform.
 | Remote marker changed after restore    | Do not overwrite; rerun from restore after the competing writer is resolved |
 | Save reports successful recovery       | Remote state was restored; investigate the failed replacement before retry  |
 | Automatic recovery also fails          | Preserve local state and inspect current/backup assets before any mutation  |
-| Retention or reset partially fails     | Retry the same operation; deletes are idempotent                            |
+| Retention cleanup fails after save     | Treat the new current state as authoritative; restore again before retrying |
+| Reset partially fails                  | Retry reset with the same target; deletes are idempotent                    |
 
 Never restore an older backup over a newer local state produced by a partially
 successful `terraform apply`. Persist the newer local state first when its

@@ -6,7 +6,7 @@ inputs:
     description: "State operation: restore, save, or reset."
     required: true
   github-token:
-    description: Token with Contents read/write access to the state repository.
+    description: Token with the required Contents access to the state repository.
     required: true
   state-repository:
     description: owner/name of the repository that stores the Release asset.

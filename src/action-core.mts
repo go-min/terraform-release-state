@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 
 export function fail(message: string): never {
@@ -29,7 +30,15 @@ export const core = {
   setOutput(name: string, value: string | number | boolean): void {
     const outputFile = process.env.GITHUB_OUTPUT;
     if (outputFile) {
-      appendFileSync(outputFile, `${name}=${String(value)}\n`);
+      const text = String(value);
+      let delimiter = `ghadelimiter_${randomUUID()}`;
+      while (text.includes(delimiter)) {
+        delimiter = `ghadelimiter_${randomUUID()}`;
+      }
+      appendFileSync(
+        outputFile,
+        `${name}<<${delimiter}\n${text}\n${delimiter}\n`,
+      );
       return;
     }
     if (process.env.GITHUB_ACTIONS === "true") {

@@ -51,8 +51,9 @@ adds versioned metadata bound to the ciphertext checksum.
 
 ## Failure handling
 
-- Idempotent reads and deletes retry transient `5xx` and rate-limit `403`/`429`
-  responses with bounded delays and GitHub rate-limit headers.
+- Idempotent reads and deletes retry transient network failures, `408`/`5xx`,
+  and rate-limit `403`/`429` responses with bounded delays and GitHub
+  rate-limit headers.
 - Permission `403` responses are not retried or treated as missing state.
 - Create and upload requests are not blindly repeated. After an ambiguous
   failure, the action accepts only an existing resource with expected content.
@@ -68,6 +69,8 @@ path reduce risk but do not provide backend-style transactions.
 ## Verification
 
 Unit tests use the Node.js native test runner and mock the GitHub API. The
-disposable integration workflow uses a unique Release tag, covers the live API
-contract, and performs native reset in an `always()` cleanup step. It runs after
-every push to `main` and can also be started manually.
+disposable integration workflow uses a unique Release tag and validates the
+live bootstrap, Release description, consistency conflict, backup retention,
+encrypted metadata integrity, recovery guard, and reset contracts. Native reset
+runs in an `always()` cleanup step. Integration runs after every push to `main`
+and can also be started manually.

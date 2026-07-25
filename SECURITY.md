@@ -2,9 +2,11 @@
 
 ## Reporting a vulnerability
 
-Do not open a public issue. Use a private GitHub security advisory or contact
-the organization owner. Include reproduction steps and affected versions, but
-never include real Terraform state, credentials, tokens, or private keys.
+Do not open a public issue. Contact the organization owner through a trusted
+private channel, or use GitHub private vulnerability reporting when it is
+available in the repository Security tab. Include reproduction steps and
+affected versions, but never include real Terraform state, credentials, tokens,
+or private keys.
 
 Only the latest repository state is maintained. Security fixes may require
 consumers to update their pinned commit SHA.

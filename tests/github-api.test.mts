@@ -102,6 +102,27 @@ test("deletions retry transient failures", async (context) => {
   assert.deepEqual(delays, [500]);
 });
 
+test("reads retry transient network failures", async (context) => {
+  const delays = captureRetryDelays(context);
+  let attempts = 0;
+  const octokit = {
+    paginate: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw Object.assign(new Error("socket closed"), {
+          cause: { code: "UND_ERR_SOCKET" },
+        });
+      }
+      return [];
+    },
+    rest: { repos: { listReleaseAssets: "list" } },
+  } as never;
+
+  assert.deepEqual(await listAssets(octokit, target, 12), []);
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [500]);
+});
+
 test("primary rate-limit 403 waits until the reset header", async (context) => {
   const delays = captureRetryDelays(context);
   context.mock.method(Date, "now", () => 1_000_000);
