@@ -55,7 +55,7 @@ async function ensureRelease(context: StateManagerContext): Promise<Release> {
       `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
     );
   }
-  return createRelease(octokit, config.target, config.tag);
+  return createRelease(octokit, config.target, config.tag, config.assetName);
 }
 
 async function loadCurrentMetadata(

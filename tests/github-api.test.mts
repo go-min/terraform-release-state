@@ -214,10 +214,46 @@ test("createRelease reconciles a release created before an ambiguous error", asy
       },
     },
   } as never;
-  assert.deepEqual(await createRelease(octokit, target, "terraform-state"), {
-    id: 12,
-    tag_name: "terraform-state",
-  });
+  assert.deepEqual(
+    await createRelease(
+      octokit,
+      target,
+      "terraform-state",
+      "terraform.tfstate",
+    ),
+    {
+      id: 12,
+      tag_name: "terraform-state",
+    },
+  );
+});
+
+test("createRelease documents the managed state without exposing its contents", async () => {
+  let request: Record<string, unknown> | undefined;
+  const octokit = {
+    rest: {
+      repos: {
+        createRelease: async (options: Record<string, unknown>) => {
+          request = options;
+          return { data: { id: 12, tag_name: "terraform-state" } };
+        },
+      },
+    },
+  } as never;
+
+  await createRelease(octokit, target, "terraform-state", "terraform.tfstate");
+
+  const body = String(request?.body);
+  assert.match(body, /\[!CAUTION\]/);
+  assert.match(body, /Service release for Terraform state; do not delete\./);
+  assert.match(body, /`ter-sh\/state`/);
+  assert.match(body, /`terraform-state`/);
+  assert.match(body, /`terraform\.tfstate`/);
+  assert.match(body, /`terraform\.tfstate\.metadata\.json`/);
+  assert.match(body, /`terraform\.tfstate\.backup-\*`/);
+  assert.match(body, /present only when the current state uses age encryption/);
+  assert.match(body, /github\.com\/ter-sh\/terraform-release-state/);
+  assert.doesNotMatch(body, /state-sha256|remote-state-marker|credentials/i);
 });
 
 test("uploadAsset reconciles an asset created before an ambiguous error", async () => {
