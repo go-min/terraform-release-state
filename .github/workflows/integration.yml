@@ -65,7 +65,19 @@ jobs:
       - name: Simulate updated Terraform state
         run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
 
-      - name: Save updated state and create backup
+      - name: Mutate remote state to simulate a concurrent writer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate") | .id')
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          mkdir -p test-state/remote
+          printf '%s\n' '{"version":4,"terraform_version":"test","serial":99,"lineage":"integration"}' > test-state/remote/terraform.tfstate
+          gh release upload "$STATE_TEST_TAG" test-state/remote/terraform.tfstate --repo "$GITHUB_REPOSITORY"
+
+      - name: Assert remote consistency conflict
+        id: conflict
+        continue-on-error: true
         uses: ./
         with:
           operation: save
@@ -74,6 +86,33 @@ jobs:
           release-tag: ${{ env.STATE_TEST_TAG }}
           state-path: ${{ env.STATE_TEST_PATH }}
           expected-remote-state-marker: ${{ steps.restore-current.outputs.remote-state-marker }}
+
+      - name: Require the consistency conflict
+        if: steps.conflict.outcome != 'failure'
+        run: exit 1
+
+      - name: Restore state after conflict
+        id: restore-after-conflict
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+
+      - name: Prepare final disposable state
+        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
+
+      - name: Save updated state and create backup
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          expected-remote-state-marker: ${{ steps.restore-after-conflict.outputs.remote-state-marker }}
           backup-retention: "1"
 
       - name: Cleanup disposable release
