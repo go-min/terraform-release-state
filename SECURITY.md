@@ -10,3 +10,8 @@ Contents read for restore and Contents write for save, backup, and retention.
 
 The action does not provide locking. Consumer workflows must use a shared
 concurrency group with `cancel-in-progress: false`.
+
+The repository pins direct package versions and GitHub Actions to immutable
+commit SHAs. Pull requests receive dependency review, and the repository runs
+CodeQL analysis on push, pull request, and a weekly schedule. Dependabot keeps
+the pinned versions and action SHAs current through reviewed pull requests.

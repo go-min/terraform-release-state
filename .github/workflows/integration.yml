@@ -17,10 +17,10 @@ jobs:
       STATE_TEST_TAG: terraform-state-integration-${{ github.run_id }}
       STATE_TEST_PATH: test-state/terraform.tfstate
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install pnpm
         run: npm install --global pnpm@11.17.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: pnpm
