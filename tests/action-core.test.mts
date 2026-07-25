@@ -64,7 +64,9 @@ test("multiline secrets are masked one line at a time", (context) => {
 
 test("failure messages cannot inject workflow commands", (context) => {
   const writes: string[] = [];
+  const previousActions = process.env.GITHUB_ACTIONS;
   const previousExitCode = process.exitCode;
+  process.env.GITHUB_ACTIONS = "true";
   context.mock.method(
     process.stderr,
     "write",
@@ -81,6 +83,8 @@ test("failure messages cannot inject workflow commands", (context) => {
     ]);
     assert.equal(process.exitCode, 1);
   } finally {
+    if (previousActions === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previousActions;
     process.exitCode = previousExitCode;
   }
 });

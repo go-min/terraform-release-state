@@ -105,20 +105,20 @@ jobs:
           gh release upload "$STATE_TEST_TAG" test-state/remote/terraform.tfstate --repo "$GITHUB_REPOSITORY"
 
       - name: Assert remote consistency conflict
-        id: conflict
-        continue-on-error: true
-        uses: ./
-        with:
-          operation: save
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          expected-remote-state-marker: ${{ steps.restore-current.outputs.remote-state-marker }}
-
-      - name: Require the consistency conflict
-        if: steps.conflict.outcome != 'failure'
-        run: exit 1
+        env:
+          GITHUB_ACTIONS: "false"
+          GITHUB_OUTPUT: ${{ runner.temp }}/expected-conflict-output
+          INPUT_OPERATION: save
+          "INPUT_GITHUB-TOKEN": ${{ github.token }}
+          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
+          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
+          "INPUT_STATE-PATH": ${{ env.STATE_TEST_PATH }}
+          "INPUT_EXPECTED-REMOTE-STATE-MARKER": ${{ steps.restore-current.outputs.remote-state-marker }}
+        run: |
+          if node dist/index.js; then
+            echo "Expected remote consistency conflict did not occur."
+            exit 1
+          fi
 
       - name: Restore state after conflict
         id: restore-after-conflict
@@ -188,20 +188,20 @@ jobs:
           gh release upload "$STATE_TEST_TAG" test-state/unrelated.txt --repo "$GITHUB_REPOSITORY"
 
       - name: Assert reset refuses an unexpected asset
-        id: reset-guard
-        continue-on-error: true
-        uses: ./
-        with:
-          operation: reset
-          confirmation: RESET
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-asset: terraform.tfstate
-
-      - name: Require reset guard failure
-        if: steps.reset-guard.outcome != 'failure'
-        run: exit 1
+        env:
+          GITHUB_ACTIONS: "false"
+          GITHUB_OUTPUT: ${{ runner.temp }}/expected-reset-output
+          INPUT_OPERATION: reset
+          "INPUT_CONFIRMATION": RESET
+          "INPUT_GITHUB-TOKEN": ${{ github.token }}
+          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
+          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
+          "INPUT_STATE-ASSET": terraform.tfstate
+        run: |
+          if node dist/index.js; then
+            echo "Expected reset guard failure did not occur."
+            exit 1
+          fi
 
       - name: Remove integration-only unrelated asset
         if: always()
@@ -290,25 +290,25 @@ jobs:
         run: rm -f "$STATE_TEST_PATH"
 
       - name: Assert encrypted metadata integrity mismatch
-        id: integrity-mismatch
         if: success()
-        continue-on-error: true
-        uses: ./
-        with:
-          operation: restore
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          encryption: age
-          age-identities: ${{ env.STATE_TEST_AGE_IDENTITY }}
-
-      - name: Require the integrity mismatch
-        if: steps.integrity-mismatch.outcome != 'failure'
-        run: exit 1
+        env:
+          GITHUB_ACTIONS: "false"
+          GITHUB_OUTPUT: ${{ runner.temp }}/expected-integrity-output
+          INPUT_OPERATION: restore
+          "INPUT_GITHUB-TOKEN": ${{ github.token }}
+          "INPUT_STATE-REPOSITORY": ${{ github.repository }}
+          "INPUT_RELEASE-TAG": ${{ env.STATE_TEST_TAG }}
+          "INPUT_STATE-PATH": ${{ env.STATE_TEST_PATH }}
+          "INPUT_ENCRYPTION": age
+          "INPUT_AGE-IDENTITIES": ${{ env.STATE_TEST_AGE_IDENTITY }}
+        run: |
+          if node dist/index.js; then
+            echo "Expected encrypted metadata integrity mismatch did not occur."
+            exit 1
+          fi
 
       - name: Restore valid age metadata
-        if: always() && steps.integrity-mismatch.outcome != 'skipped'
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -47,7 +47,11 @@ export const core = {
   },
 
   setFailed(message: string): void {
-    process.stderr.write(`::error::${commandValue(message)}\n`);
+    if (process.env.GITHUB_ACTIONS === "true") {
+      process.stderr.write(`::error::${commandValue(message)}\n`);
+    } else {
+      process.stderr.write(`${message}\n`);
+    }
     process.exitCode = 1;
   },
 };
