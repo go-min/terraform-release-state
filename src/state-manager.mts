@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { core, fail } from "./action-core.mjs";
 import { isBackupAsset, metadataAssetNames } from "./backups.mjs";
 import {
@@ -18,7 +18,7 @@ import {
   sha256,
 } from "./marker.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
-import { writeStateFile } from "./state-files.mjs";
+import { readStateFile, writeStateFile } from "./state-files.mjs";
 import { backupName } from "./backup-names.mjs";
 
 function emitOutputs(
@@ -87,7 +87,7 @@ export async function restore(context: StateManagerContext): Promise<void> {
     return;
   }
   const data = await downloadAsset(octokit, config.target, asset);
-  writeStateFile(config.statePath, data);
+  writeStateFile(config.statePath, config.workspace, data);
   emitOutputs("restore", release, asset, data);
 }
 
@@ -135,7 +135,8 @@ async function retainBackups(
   const backups = assets
     .filter(
       (asset) =>
-        asset.state === "uploaded" && isBackupAsset(asset.name, config.assetName),
+        asset.state === "uploaded" &&
+        isBackupAsset(asset.name, config.assetName),
     )
     .sort(
       (left, right) =>
@@ -151,11 +152,39 @@ async function retainBackups(
   return Math.min(backups.length, config.backupRetention);
 }
 
+async function recoverPreviousState(
+  context: StateManagerContext,
+  release: Release,
+  replacement: Asset | undefined,
+  previous: Buffer | undefined,
+): Promise<void> {
+  const { octokit, config } = context;
+  const current = findAsset(
+    await listAssets(octokit, config.target, release.id),
+    config.assetName,
+  );
+  if (current) {
+    if (!replacement || current.id !== replacement.id) {
+      fail("Remote state changed during recovery; refusing to overwrite it.");
+    }
+    await deleteAsset(octokit, config.target, current.id);
+  }
+  if (previous) {
+    await uploadAsset(
+      octokit,
+      config.target,
+      release.id,
+      config.assetName,
+      previous,
+    );
+  }
+}
+
 export async function save(context: StateManagerContext): Promise<void> {
   const { octokit, config } = context;
   if (!existsSync(config.statePath))
     fail(`State file not found: ${config.statePath}`);
-  const data = readFileSync(config.statePath);
+  const data = readStateFile(config.statePath, config.workspace);
   if (!data.length) fail(`State file is empty: ${config.statePath}`);
 
   const expected = config.expectedMarker
@@ -206,40 +235,42 @@ export async function save(context: StateManagerContext): Promise<void> {
   current = latest;
   if (current) await deleteAsset(octokit, config.target, current.id);
 
+  let replacement: Asset | undefined;
   try {
-    await uploadAsset(
+    replacement = await uploadAsset(
       octokit,
       config.target,
       release.id,
       config.assetName,
       data,
     );
-  } catch (error) {
-    const failed = findAsset(
-      await listAssets(octokit, config.target, release.id),
-      config.assetName,
-    );
-    if (failed) await deleteAsset(octokit, config.target, failed.id);
-    if (previous)
-      await uploadAsset(
-        octokit,
-        config.target,
-        release.id,
-        config.assetName,
-        previous,
+    assets = await listAssets(octokit, config.target, release.id);
+    current = findAsset(assets, config.assetName);
+    if (!current)
+      fail(`Uploaded state asset ${config.assetName} could not be found.`);
+    if (current.id !== replacement.id) {
+      fail("Remote state changed during save; refusing to overwrite it.");
+    }
+    const uploaded = await downloadAsset(octokit, config.target, current);
+    if (sha256(uploaded) !== sha256(data)) {
+      fail(
+        `Uploaded state asset ${config.assetName} failed checksum verification.`,
       );
+    }
+  } catch (error) {
+    try {
+      await recoverPreviousState(context, release, replacement, previous);
+    } catch (recoveryError) {
+      throw new Error(
+        `State save failed and automatic recovery could not complete: ${
+          recoveryError instanceof Error
+            ? recoveryError.message
+            : "unknown recovery error"
+        }`,
+        { cause: error },
+      );
+    }
     throw error;
-  }
-
-  assets = await listAssets(octokit, config.target, release.id);
-  current = findAsset(assets, config.assetName);
-  if (!current)
-    fail(`Uploaded state asset ${config.assetName} could not be found.`);
-  const uploaded = await downloadAsset(octokit, config.target, current);
-  if (sha256(uploaded) !== sha256(data)) {
-    fail(
-      `Uploaded state asset ${config.assetName} failed checksum verification.`,
-    );
   }
   const backupCount = await retainBackups(context, assets);
   emitOutputs("save", release, current, data, bootstrapped);

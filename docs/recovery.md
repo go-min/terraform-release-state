@@ -19,8 +19,9 @@ The deletion sequence is:
 
 1. list all assets with GitHub API pagination;
 2. delete the current state and backup assets;
-3. delete the Release;
-4. delete the tag reference.
+3. list assets again and stop if any appeared during deletion;
+4. delete the Release;
+5. delete the tag reference.
 
 Each delete treats HTTP 404 as already absent and retries transient API errors.
 If a later delete fails, rerun the same confirmed reset. Already-deleted assets

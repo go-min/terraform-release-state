@@ -135,7 +135,7 @@ For reset recovery steps and partial deletion handling, see
 ## Security
 
 - State content and credentials are never logged or returned as outputs.
-- Paths are restricted to `GITHUB_WORKSPACE`.
+- Paths are restricted to real, non-symlink directories inside `GITHUB_WORKSPACE`.
 - The action does not create plaintext recovery files.
 - Use a short-lived GitHub App installation token where possible.
 - For cross-repository storage, the token needs access to the state repository.
@@ -190,3 +190,6 @@ Design records are available in [discovery](docs/discovery.md),
 [architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
 and the [preview API review](docs/api-review.md). They describe preview behavior
 only; no production migration is included.
+
+The action's security assumptions and residual risks are documented in the
+[threat model](docs/threat-model.md).

@@ -49,7 +49,13 @@ test("validates action inputs", async (t) => {
 
   await t.test("requires explicit reset confirmation", () => {
     assert.doesNotThrow(() => validateResetConfirmation("RESET"));
-    assert.throws(() => validateResetConfirmation("reset"), /confirmation=RESET/);
-    assert.throws(() => validateResetConfirmation(""), /no state resources were changed/);
+    assert.throws(
+      () => validateResetConfirmation("reset"),
+      /confirmation=RESET/,
+    );
+    assert.throws(
+      () => validateResetConfirmation(""),
+      /no state resources were changed/,
+    );
   });
 });

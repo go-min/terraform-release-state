@@ -16,7 +16,11 @@ export function readConfig(): ActionConfig {
   const operation = core
     .getInput("operation", { required: true })
     .toLowerCase();
-  if (operation !== "restore" && operation !== "save" && operation !== "reset") {
+  if (
+    operation !== "restore" &&
+    operation !== "save" &&
+    operation !== "reset"
+  ) {
     fail("operation must be restore, save, or reset.");
   }
 
@@ -39,10 +43,8 @@ export function readConfig(): ActionConfig {
     target,
     tag,
     assetName,
-    statePath: resolveStatePath(
-      statePathInput || ".",
-      workspace,
-    ),
+    workspace,
+    statePath: resolveStatePath(statePathInput || ".", workspace),
     bootstrap: parseBoolean(core.getInput("bootstrap"), "bootstrap"),
     expectedMarker: core.getInput("expected-remote-state-marker"),
     backupRetention: parseRetention(core.getInput("backup-retention")),

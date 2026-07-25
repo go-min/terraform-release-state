@@ -27,6 +27,7 @@ export type ActionConfig = {
   target: RepositoryTarget;
   tag: string;
   assetName: string;
+  workspace: string;
   statePath: string;
   bootstrap: boolean;
   expectedMarker: string;

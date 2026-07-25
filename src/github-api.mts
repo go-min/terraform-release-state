@@ -55,17 +55,21 @@ export async function createRelease(
   target: RepositoryTarget,
   tag: string,
 ): Promise<Release> {
-  const response = await retry(() =>
-    octokit.rest.repos.createRelease({
+  try {
+    const response = await octokit.rest.repos.createRelease({
       ...target,
       tag_name: tag,
       name: "Terraform state",
       body: "Service release for Terraform state; do not delete.",
       draft: false,
       prerelease: false,
-    }),
-  );
-  return response.data;
+    });
+    return response.data;
+  } catch (error) {
+    const existing = await getRelease(octokit, target, tag);
+    if (existing) return existing;
+    throw error;
+  }
 }
 
 export async function listAssets(
@@ -122,16 +126,27 @@ export async function uploadAsset(
   data: Buffer,
   contentType = "application/octet-stream",
 ): Promise<Asset> {
-  const response = await retry(() =>
-    octokit.rest.repos.uploadReleaseAsset({
+  try {
+    const response = await octokit.rest.repos.uploadReleaseAsset({
       ...target,
       release_id: releaseId,
       name,
       data: data as unknown as string,
       headers: { "content-type": contentType, "content-length": data.length },
-    }),
-  );
-  return response.data;
+    });
+    return response.data;
+  } catch (error) {
+    const existing = findAsset(
+      await listAssets(octokit, target, releaseId),
+      name,
+    );
+    if (!existing) throw error;
+    const existingData = await downloadAsset(octokit, target, existing);
+    if (sha256(existingData) !== sha256(data)) {
+      fail(`Release asset ${name} already exists with unexpected content.`);
+    }
+    return existing;
+  }
 }
 
 export async function deleteAsset(

@@ -26,7 +26,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run mocked API failure coverage
-        run: node --experimental-strip-types --test tests/github-api.test.mts tests/reset.test.mts
+        run: pnpm test
       - run: mkdir -p test-state
 
       - name: Restore missing state with explicit bootstrap
