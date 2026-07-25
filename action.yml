@@ -1,5 +1,5 @@
 name: Terraform Release State
-description: Store, restore, verify, and back up Terraform state using GitHub Release assets.
+description: Store, restore, verify, encrypt, and back up Terraform state with GitHub Release assets.
 author: ter-sh
 inputs:
   operation:
