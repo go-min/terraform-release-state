@@ -9,23 +9,23 @@ importers:
   .:
     dependencies:
       '@actions/github':
-        specifier: ^9.1.1
+        specifier: 9.1.1
         version: 9.1.1
     devDependencies:
       '@biomejs/biome':
-        specifier: ^2.5.5
+        specifier: 2.5.5
         version: 2.5.5
       '@types/node':
-        specifier: ^26.1.1
+        specifier: 26.1.1
         version: 26.1.1
       '@vercel/ncc':
-        specifier: ^0.44.1
+        specifier: 0.44.1
         version: 0.44.1
       prettier:
-        specifier: ^3.9.6
+        specifier: 3.9.6
         version: 3.9.6
       typescript:
-        specifier: ^5.9.3
+        specifier: 5.9.3
         version: 5.9.3
 
 packages:
