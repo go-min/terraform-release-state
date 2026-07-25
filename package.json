@@ -6,8 +6,11 @@
   "type": "module",
   "scripts": {
     "build": "ncc build src/main.ts --minify --source-map",
-    "format": "prettier --write action.yml package.json src tests",
-    "format:check": "prettier --check action.yml package.json src tests",
+    "format": "pnpm format:biome && prettier --write action.yml",
+    "format:biome": "biome format --write package.json src tests",
+    "format:check": "pnpm format:check:biome && prettier --check action.yml",
+    "format:check:biome": "biome format package.json src tests",
+    "lint": "biome lint package.json src tests",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -15,6 +18,7 @@
     "@actions/github": "^9.1.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
     "@vercel/ncc": "^0.44.1",
     "prettier": "^3.9.6",

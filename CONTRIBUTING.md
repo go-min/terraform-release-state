@@ -1,7 +1,7 @@
 # Contributing
 
 1. Run `pnpm install --frozen-lockfile`.
-2. Run `pnpm typecheck`, `pnpm test`, and `pnpm format:check`.
+2. Run `pnpm typecheck`, `pnpm test`, `pnpm format:check`, and `pnpm lint`.
 3. Run `pnpm build` and commit the generated `dist/` bundle.
 4. Keep state contents, credentials, and production Release assets out of tests.
 

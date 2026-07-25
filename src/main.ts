@@ -270,14 +270,12 @@ async function restore(
   allowBootstrap: boolean,
 ): Promise<void> {
   let release = await getRelease(octokit, owner, repo, tag);
-  let bootstrapped = false;
   if (!release) {
     if (!allowBootstrap)
       fail(
         `State release ${tag} does not exist; set bootstrap=true explicitly.`,
       );
     release = await createRelease(octokit, owner, repo, tag);
-    bootstrapped = true;
   }
   const asset = findAsset(await assets(octokit, owner, repo, release.id), name);
   if (!asset) {

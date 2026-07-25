@@ -120,6 +120,7 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm format:check
+pnpm lint
 pnpm build
 ```
 
