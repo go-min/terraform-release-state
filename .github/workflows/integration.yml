@@ -121,8 +121,35 @@ jobs:
           expected-remote-state-marker: ${{ steps.restore-after-conflict.outputs.remote-state-marker }}
           backup-retention: "1"
 
-      - name: Cleanup disposable release
+      - name: Reset disposable state
+        if: success()
+        uses: ./
+        with:
+          operation: reset
+          confirmation: RESET
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-asset: terraform.tfstate
+
+      - name: Restore clean state storage after reset
+        if: success()
+        uses: ./
+        with:
+          operation: restore
+          bootstrap: "true"
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+
+      - name: Cleanup disposable release with native reset
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release delete "$STATE_TEST_TAG" --repo "$GITHUB_REPOSITORY" --yes
+        uses: ./
+        with:
+          operation: reset
+          confirmation: RESET
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-asset: terraform.tfstate

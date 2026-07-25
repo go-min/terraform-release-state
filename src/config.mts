@@ -16,8 +16,8 @@ export function readConfig(): ActionConfig {
   const operation = core
     .getInput("operation", { required: true })
     .toLowerCase();
-  if (operation !== "restore" && operation !== "save") {
-    fail("operation must be restore or save.");
+  if (operation !== "restore" && operation !== "save" && operation !== "reset") {
+    fail("operation must be restore, save, or reset.");
   }
 
   const target = parseRepository(
@@ -29,6 +29,10 @@ export function readConfig(): ActionConfig {
   validateReleaseComponent(assetName, "state-asset");
 
   const workspace = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
+  const statePathInput = core.getInput("state-path");
+  if (operation !== "reset" && !statePathInput) {
+    fail("state-path is required for restore and save.");
+  }
   return {
     operation,
     token,
@@ -36,7 +40,7 @@ export function readConfig(): ActionConfig {
     tag,
     assetName,
     statePath: resolveStatePath(
-      core.getInput("state-path", { required: true }),
+      statePathInput || ".",
       workspace,
     ),
     bootstrap: parseBoolean(core.getInput("bootstrap"), "bootstrap"),
@@ -44,5 +48,6 @@ export function readConfig(): ActionConfig {
     backupRetention: parseRetention(core.getInput("backup-retention")),
     sourceCommit: core.getInput("source-commit"),
     workflowRunId: core.getInput("workflow-run-id"),
+    resetConfirmation: core.getInput("confirmation"),
   };
 }

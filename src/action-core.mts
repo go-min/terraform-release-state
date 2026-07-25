@@ -30,21 +30,3 @@ export const core = {
     process.exitCode = 1;
   },
 };
-
-const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
-
-export async function retry<T>(operation: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      const status = (error as { status?: number }).status;
-      if (!status || !RETRYABLE_STATUSES.has(status) || attempt >= 4) {
-        throw error;
-      }
-      await new Promise((resolveDelay) =>
-        setTimeout(resolveDelay, 500 * 2 ** attempt),
-      );
-    }
-  }
-}
