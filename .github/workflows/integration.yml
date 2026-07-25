@@ -200,6 +200,10 @@ jobs:
 
       - name: Restore clean state storage after reset
         if: success()
+        run: rm -f "$STATE_TEST_PATH"
+
+      - name: Bootstrap clean state storage after reset
+        if: success()
         uses: ./
         with:
           operation: restore
