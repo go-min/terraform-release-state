@@ -62,16 +62,17 @@ Missing state fails closed by default.
 
 ## Inputs
 
-- `operation`: required, `restore` or `save`;
+- `operation`: required, `restore`, `save`, or `reset`;
 - `github-token`: required token with Contents access to the state repository;
 - `state-repository`: defaults to `GITHUB_REPOSITORY`;
 - `release-tag`: defaults to `terraform-state`;
 - `state-asset`: defaults to `terraform.tfstate`;
-- `state-path`: required workspace-relative local path;
+- `state-path`: required for `restore` and `save`, workspace-relative local path;
 - `bootstrap`: defaults to `false`;
 - `expected-remote-state-marker`: restore output passed to save;
 - `backup-retention`: defaults to `20`, maximum `1000`;
 - `source-commit` and `workflow-run-id`: optional recovery metadata.
+- `confirmation`: must be exactly `RESET` when `operation: reset`.
 
 ## Outputs
 
@@ -81,8 +82,36 @@ Missing state fails closed by default.
 - `state-sha256`: checksum of the local state file;
 - `state-asset-id` and `release-id`: GitHub identifiers for diagnostics;
 - `backup-asset-name` and `backup-count`: save results.
+- `reset-deleted-asset-count` and `reset-release-found`: reset results.
 
 The action never returns state content, tokens, or keys as outputs.
+
+## Reset
+
+Reset is a destructive, explicitly confirmed operation for disposable or
+approved recovery workflows. It deletes only the configured state Release's
+current asset, `state-asset.backup-*` assets (including their `.metadata.json`
+files), the Release, and its tag. It never runs Terraform or uses the `gh` CLI.
+
+The action first lists every asset in the target Release. If any asset is
+outside the configured current-state and backup namespace, reset fails before
+deleting anything. A missing Release or tag is treated as already reset, so the
+operation is safe to retry after a partial failure.
+
+```yaml
+- name: Reset disposable Terraform state
+  uses: ter-sh/terraform-release-state@<commit-sha>
+  with:
+    operation: reset
+    confirmation: RESET
+    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
+    state-repository: ter-sh/terraform-release-state
+    release-tag: terraform-state-test
+    state-asset: terraform.tfstate
+```
+
+Never expose `confirmation` as an unreviewed or user-controlled free-form
+input. Use a protected workflow/environment for production recovery.
 
 ## Behavior and recovery
 
@@ -99,6 +128,9 @@ also fails.
 
 The action can persist a state file after a failed Terraform step. The consumer
 must call save with `if: always()` and preserve the restore marker.
+
+For reset recovery steps and partial deletion handling, see
+[docs/recovery.md](docs/recovery.md).
 
 ## Security
 

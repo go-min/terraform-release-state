@@ -1,6 +1,38 @@
+import { createHash } from "node:crypto";
 import type { Asset, Octokit, Release, RepositoryTarget } from "./types.mjs";
-import { retry, fail } from "./action-core.mjs";
-import { assetDigest, sha256 } from "./marker.mjs";
+
+function fail(message: string): never {
+  throw new Error(message);
+}
+
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+async function retry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (!status || !RETRYABLE_STATUSES.has(status) || attempt >= 4) {
+        throw error;
+      }
+      await new Promise((resolveDelay) =>
+        setTimeout(resolveDelay, 500 * 2 ** attempt),
+      );
+    }
+  }
+}
+
+function sha256(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+function assetDigest(asset: Asset): string {
+  return ((asset as Asset & { digest?: string }).digest || "").replace(
+    /^sha256:/,
+    "",
+  );
+}
 
 export async function getRelease(
   octokit: Octokit,
@@ -107,7 +139,39 @@ export async function deleteAsset(
   target: RepositoryTarget,
   assetId: number,
 ): Promise<void> {
-  await retry(() =>
-    octokit.rest.repos.deleteReleaseAsset({ ...target, asset_id: assetId }),
-  );
+  try {
+    await retry(() =>
+      octokit.rest.repos.deleteReleaseAsset({ ...target, asset_id: assetId }),
+    );
+  } catch (error) {
+    if ((error as { status?: number }).status !== 404) throw error;
+  }
+}
+
+export async function deleteRelease(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  releaseId: number,
+): Promise<void> {
+  try {
+    await retry(() =>
+      octokit.rest.repos.deleteRelease({ ...target, release_id: releaseId }),
+    );
+  } catch (error) {
+    if ((error as { status?: number }).status !== 404) throw error;
+  }
+}
+
+export async function deleteTag(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  tag: string,
+): Promise<void> {
+  try {
+    await retry(() =>
+      octokit.rest.git.deleteRef({ ...target, ref: `tags/${tag}` }),
+    );
+  } catch (error) {
+    if ((error as { status?: number }).status !== 404) throw error;
+  }
 }

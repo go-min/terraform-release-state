@@ -15,5 +15,8 @@ describe("action metadata", () => {
     assert.match(metadata, /expected-remote-state-marker:/);
     assert.match(metadata, /backup-retention:/);
     assert.match(metadata, /remote-state-marker:/);
+    assert.match(metadata, /State operation: restore, save, or reset/);
+    assert.match(metadata, /confirmation:/);
+    assert.match(metadata, /state-path:[\s\S]*required: false/);
   });
 });

@@ -22,7 +22,7 @@ export type RepositoryTarget = {
 };
 
 export type ActionConfig = {
-  operation: "restore" | "save";
+  operation: "restore" | "save" | "reset";
   token: string;
   target: RepositoryTarget;
   tag: string;
@@ -33,6 +33,7 @@ export type ActionConfig = {
   backupRetention: number;
   sourceCommit: string;
   workflowRunId: string;
+  resetConfirmation: string;
 };
 
 export type StateManagerContext = {

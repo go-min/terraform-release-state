@@ -3,7 +3,7 @@ description: Store, restore, verify, and back up Terraform state using GitHub Re
 author: ter-sh
 inputs:
   operation:
-    description: "State operation: restore or save."
+    description: "State operation: restore, save, or reset."
     required: true
   github-token:
     description: Token with Contents read/write access to the state repository.
@@ -22,7 +22,7 @@ inputs:
     default: terraform.tfstate
   state-path:
     description: Workspace-relative path for the local state file.
-    required: true
+    required: false
   bootstrap:
     description: Explicitly allow creation of missing state storage.
     required: false
@@ -41,6 +41,10 @@ inputs:
     default: ""
   workflow-run-id:
     description: Workflow run ID written to backup metadata.
+    required: false
+    default: ""
+  confirmation:
+    description: "Required exact confirmation RESET for the destructive reset operation."
     required: false
     default: ""
 outputs:
@@ -62,6 +66,10 @@ outputs:
     description: Backup asset created during save, when applicable.
   backup-count:
     description: Number of retained backup assets after save.
+  reset-deleted-asset-count:
+    description: Number of state and backup assets deleted by reset.
+  reset-release-found:
+    description: Whether reset found the target state release.
 runs:
   using: node24
   main: dist/index.js
