@@ -10,16 +10,22 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-// @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-import { readStateFile, writeStateFile } from "../src/state-files.mts";
+const { readStateFile, writeStateFile } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/state-files.mjs"
+);
 
 test("writeStateFile creates secure parent directories and writes mode 0600", () => {
   const root = mkdtempSync(join(tmpdir(), "terraform-release-state-"));
   const path = join(root, "nested", "state", "terraform.tfstate");
-  writeStateFile(path, root, Buffer.from("state"));
-  assert.equal(readFileSync(path, "utf8"), "state");
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  assert.equal(statSync(join(root, "nested", "state")).mode & 0o777, 0o700);
+  try {
+    writeStateFile(path, root, Buffer.from("state"));
+    assert.equal(readFileSync(path, "utf8"), "state");
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(statSync(join(root, "nested", "state")).mode & 0o777, 0o700);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("state files reject symbolic links that escape the workspace", () => {

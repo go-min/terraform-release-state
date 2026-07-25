@@ -1,19 +1,8 @@
-import { createHash } from "node:crypto";
+import { assetDigest } from "./integrity.mjs";
 import type { Asset, DecodedMarker, RemoteStateMarker } from "./types.mjs";
 
 function fail(message: string): never {
   throw new Error(message);
-}
-
-export function sha256(data: Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-export function assetDigest(asset: Asset): string {
-  return ((asset as Asset & { digest?: string }).digest || "").replace(
-    /^sha256:/,
-    "",
-  );
 }
 
 export function marker(asset: Asset | undefined): string {

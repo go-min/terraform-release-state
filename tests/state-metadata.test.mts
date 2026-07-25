@@ -4,16 +4,16 @@ const { createStateMetadata, parseStateMetadata } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/state-metadata.mjs"
 );
-const { currentMetadataName } = await import(
+const { metadataName } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/backups.mjs"
+  "../.test-build/src/asset-names.mjs"
 );
 
 test("encrypted state metadata is versioned and bound to ciphertext", () => {
   const ciphertext = Buffer.from("ciphertext");
   const metadata = createStateMetadata(ciphertext);
   assert.equal(
-    currentMetadataName("terraform.tfstate"),
+    metadataName("terraform.tfstate"),
     "terraform.tfstate.metadata.json",
   );
   assert.equal(

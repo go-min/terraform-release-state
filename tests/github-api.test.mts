@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
-import {
+import { test, type TestContext } from "node:test";
+const {
   deleteAsset,
   deleteRelease,
   deleteTag,
@@ -9,12 +9,33 @@ import {
   getRelease,
   listAssets,
   uploadAsset,
-  // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-} from "../src/github-api.mts";
+} = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/github-api.mjs"
+);
 
 const target = { owner: "ter-sh", repo: "state" };
-const failure = (status: number) =>
-  Object.assign(new Error(`HTTP ${status}`), { status });
+const failure = (
+  status: number,
+  response?: {
+    data?: { message?: string };
+    headers?: Record<string, string>;
+  },
+) => Object.assign(new Error(`HTTP ${status}`), { status, response });
+
+function captureRetryDelays(context: TestContext): number[] {
+  const delays: number[] = [];
+  context.mock.method(
+    globalThis,
+    "setTimeout",
+    (callback: () => void, delay = 0) => {
+      delays.push(delay);
+      callback();
+      return {} as NodeJS.Timeout;
+    },
+  );
+  return delays;
+}
 
 test("getRelease treats a missing release as absent", async () => {
   const octokit = {
@@ -61,7 +82,8 @@ test("listAssets uses pagination through the internal API client", async () => {
   ]);
 });
 
-test("deletions retry transient failures", async () => {
+test("deletions retry transient failures", async (context) => {
+  const delays = captureRetryDelays(context);
   let attempts = 0;
   const octokit = {
     rest: {
@@ -77,6 +99,56 @@ test("deletions retry transient failures", async () => {
   } as never;
   await deleteAsset(octokit, target, 1);
   assert.equal(attempts, 2);
+  assert.deepEqual(delays, [500]);
+});
+
+test("primary rate-limit 403 waits until the reset header", async (context) => {
+  const delays = captureRetryDelays(context);
+  context.mock.method(Date, "now", () => 1_000_000);
+  const reset = 1002;
+  let attempts = 0;
+  const octokit = {
+    rest: {
+      repos: {
+        deleteReleaseAsset: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw failure(403, {
+              headers: {
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": String(reset),
+              },
+            });
+          }
+        },
+      },
+    },
+  } as never;
+
+  await deleteAsset(octokit, target, 1);
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [2000]);
+});
+
+test("rate-limit 429 respects Retry-After", async (context) => {
+  const delays = captureRetryDelays(context);
+  let attempts = 0;
+  const octokit = {
+    rest: {
+      repos: {
+        deleteReleaseAsset: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw failure(429, { headers: { "retry-after": "3" } });
+          }
+        },
+      },
+    },
+  } as never;
+
+  await deleteAsset(octokit, target, 1);
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [3000]);
 });
 
 test("downloadAsset rejects a digest mismatch without exposing content", async () => {
@@ -177,7 +249,8 @@ test("uploadAsset reconciles an asset created before an ambiguous error", async 
   );
 });
 
-test("retry stops after the bounded transient retry budget", async () => {
+test("retry stops after the bounded transient retry budget", async (context) => {
+  const delays = captureRetryDelays(context);
   let attempts = 0;
   const octokit = {
     rest: {
@@ -191,6 +264,7 @@ test("retry stops after the bounded transient retry budget", async () => {
   } as never;
   await assert.rejects(deleteRelease(octokit, target, 12), /HTTP 503/);
   assert.equal(attempts, 5);
+  assert.deepEqual(delays, [500, 1000, 2000, 4000]);
 });
 
 test("deletions treat 404 as already absent", async () => {
@@ -217,14 +291,17 @@ test("deletions treat 404 as already absent", async () => {
 });
 
 test("non-retryable deletion failures remain errors", async () => {
+  let attempts = 0;
   const octokit = {
     rest: {
       repos: {
         deleteReleaseAsset: async () => {
+          attempts += 1;
           throw failure(403);
         },
       },
     },
   } as never;
   await assert.rejects(deleteAsset(octokit, target, 1), /HTTP 403/);
+  assert.equal(attempts, 1);
 });

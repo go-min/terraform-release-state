@@ -6,17 +6,16 @@ production migration.
 
 ## Current implementation
 
-| Area              | Files                                                   | Responsibility                                                             |
-| ----------------- | ------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Action contract   | `action.yml`, `src/config.mts`                          | Inputs, outputs, Node 24 entrypoint, validation wiring                     |
-| GitHub API        | `src/github-api.mts`                                    | Release lookup/creation, paginated assets, upload/download/delete, retries |
-| State lifecycle   | `src/state-manager.mts`                                 | Restore, save, consistency checks, backup, verification, retention         |
-| Reset lifecycle   | `src/reset.mts`, `src/reset-core.mts`                   | Confirmed deletion of one state Release, assets, backups, and tag          |
-| Markers/integrity | `src/marker.mts`                                        | SHA-256 and opaque remote asset marker                                     |
-| Backup namespace  | `src/backups.mts`, `src/backup-names.mts`               | Backup classification, metadata naming, collision-resistant names          |
-| Local files       | `src/state-files.mts`, `src/validation.mts`             | Workspace containment, secure directory/file creation, input validation    |
-| Runtime adapter   | `src/action-core.mts`, `src/main.mts`                   | Action inputs/outputs, masking, failure reporting, dispatch                |
-| Verification      | `tests/*.test.mts`, `.github/workflows/integration.yml` | Native unit tests and disposable live Release coverage                     |
+| Area            | Files                                                   | Responsibility                                                          |
+| --------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Action contract | `action.yml`, `src/config.mts`                          | Inputs, outputs, Node 24 entrypoint, validation wiring                  |
+| GitHub API      | `src/github-api.mts`, `src/integrity.mts`               | Release API, pagination, retries, asset digests, and checksums          |
+| State lifecycle | `src/state-manager.mts`, `src/backup-manager.mts`       | Restore, save, consistency, backup, verification, and retention         |
+| Asset namespace | `src/asset-names.mts`, `src/state-metadata.mts`         | Current/backup names and encrypted-state metadata                       |
+| Reset lifecycle | `src/reset.mts`, `src/reset-core.mts`                   | Confirmed deletion of one state Release, assets, backups, and tag       |
+| Local files     | `src/state-files.mts`, `src/validation.mts`             | Workspace containment, secure directory/file creation, input validation |
+| Runtime adapter | `src/action-core.mts`, `src/main.mts`                   | Action inputs/outputs, masking, failure reporting, dispatch             |
+| Verification    | `tests/*.test.mts`, `.github/workflows/integration.yml` | Native unit tests and disposable live Release coverage                  |
 
 ## Reusable boundary
 
@@ -59,9 +58,12 @@ absent so a retry can complete after a partial failure.
 
 Remaining external assumptions are that the configured Release is dedicated to
 this state namespace and that the consumer supplies workflow-level locking.
+An orphan current metadata asset is treated as corruption, not as an empty
+state bootstrap signal.
 
 ## Extraction result
 
 The extracted action no longer depends on a production repository's scripts,
-Terraform command, or `gh` CLI. Its only runtime package dependency is
-`@actions/github`; the generated bundle is committed for action consumers.
+Terraform command, or `gh` CLI. Runtime package dependencies are
+`@actions/github` for the GitHub API and `age-encryption` for opt-in encryption;
+the generated bundle is committed for action consumers.

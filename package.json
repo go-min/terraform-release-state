@@ -6,13 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "trap 'rm -rf .build' EXIT; tsc -p tsconfig.build.json && cp .build/src/main.mjs .build/src/main.js && rm -f dist/index.mjs dist/index.mjs.map && ncc build .build/src/main.js --minify --source-map",
-    "format": "pnpm format:biome && prettier --write action.yml '.github/workflows/*.yml' '**/*.md'",
-    "format:biome": "biome format --write package.json src tests",
-    "format:check": "pnpm format:check:biome && prettier --check action.yml '.github/workflows/*.yml' '**/*.md'",
-    "format:check:biome": "biome format package.json src tests",
-    "lint": "pnpm lint:biome && pnpm lint:markdown",
-    "lint:biome": "biome lint package.json src tests",
-    "lint:markdown": "markdownlint-cli2 '**/*.md' '#node_modules/**'",
+    "format": "biome format --write package.json src tests && prettier --write action.yml '.github/workflows/*.yml' '**/*.md'",
+    "format:check": "biome format package.json src tests && prettier --check action.yml '.github/workflows/*.yml' '**/*.md'",
+    "lint": "biome lint package.json src tests && markdownlint-cli2 '**/*.md' '#node_modules/**'",
     "test": "trap 'rm -rf .test-build' EXIT; tsc -p tsconfig.test.json && node --experimental-strip-types --test tests/*.test.mts",
     "typecheck": "tsc --noEmit"
   },

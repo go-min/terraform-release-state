@@ -54,6 +54,12 @@ Identities are secret inputs, masked before use, never written by the action,
 never logged, and never returned through outputs. Rotation uses overlapping
 recipient sets and must retain old identities for the backup retention window.
 
+The selected implementation uses the `age-encryption` TypeScript package in the
+Node runtime. Invoking an external `age` binary, implementing the format with
+bespoke cryptography, and passphrase encryption were rejected because they add
+runner dependencies, security-sensitive maintenance, or weaker rotation
+semantics. The encrypted preview supports native X25519 recipients only.
+
 ## Compatibility decision
 
 Because this is pre-`v1`, API cleanup and breaking changes are allowed when

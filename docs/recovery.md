@@ -12,9 +12,9 @@ fails before making API changes when confirmation is absent or different.
 
 Reset targets only the configured repository, Release tag, current state asset,
 its current `.metadata.json` record when encrypted, backup assets, and matching
-`.metadata.json` files. It first lists all Release
-assets and refuses to proceed if an unexpected asset is present. This prevents
-an accidentally shared Release from being deleted.
+`.metadata.json` files. It first lists all Release assets and refuses to proceed
+if an unexpected asset is present. This prevents an accidentally shared Release
+from being deleted.
 
 The deletion sequence is:
 

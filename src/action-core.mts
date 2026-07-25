@@ -4,6 +4,13 @@ export function fail(message: string): never {
   throw new Error(message);
 }
 
+function commandValue(value: string): string {
+  return value
+    .replaceAll("%", "%25")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+}
+
 export const core = {
   getInput(name: string, options: { required?: boolean } = {}): string {
     const key = `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
@@ -13,7 +20,10 @@ export const core = {
   },
 
   setSecret(value: string): void {
-    process.stdout.write(`::add-mask::${value}\n`);
+    for (const line of value.split(/\r?\n/)) {
+      const secret = line.trim();
+      if (secret) process.stdout.write(`::add-mask::${commandValue(secret)}\n`);
+    }
   },
 
   setOutput(name: string, value: string | number | boolean): void {
@@ -22,11 +32,13 @@ export const core = {
       appendFileSync(outputFile, `${name}=${String(value)}\n`);
       return;
     }
-    process.stdout.write(`::set-output name=${name}::${String(value)}\n`);
+    if (process.env.GITHUB_ACTIONS === "true") {
+      fail("GITHUB_OUTPUT is unavailable; refusing deprecated output syntax.");
+    }
   },
 
   setFailed(message: string): void {
-    process.stderr.write(`::error::${message}\n`);
+    process.stderr.write(`::error::${commandValue(message)}\n`);
     process.exitCode = 1;
   },
 };

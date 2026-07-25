@@ -5,7 +5,53 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 // @ts-expect-error This source module is compiled into the temporary native-test build.
-const { save } = await import("../.test-build/src/state-manager.mjs");
+const { restore, save } = await import("../.test-build/src/state-manager.mjs");
+
+test("restore refuses orphan current metadata even with bootstrap", async () => {
+  const workspace = mkdtempSync(
+    join(tmpdir(), "terraform-release-state-restore-"),
+  );
+  const config = {
+    operation: "restore",
+    token: "token",
+    target: { owner: "ter-sh", repo: "state" },
+    tag: "terraform-state",
+    assetName: "terraform.tfstate",
+    workspace,
+    statePath: join(workspace, "terraform.tfstate"),
+    bootstrap: true,
+    expectedMarker: "",
+    backupRetention: 20,
+    sourceCommit: "",
+    workflowRunId: "",
+    resetConfirmation: "",
+    encryption: { mode: "age", recipients: [], identities: [] },
+  } as never;
+  const octokit = {
+    paginate: async () => [
+      {
+        id: 2,
+        name: "terraform.tfstate.metadata.json",
+        state: "uploaded",
+      },
+    ],
+    rest: {
+      repos: {
+        getReleaseByTag: async () => ({ data: { id: 1 } }),
+        listReleaseAssets: "list",
+      },
+    },
+  } as never;
+
+  try {
+    await assert.rejects(
+      restore({ octokit, config }),
+      /metadata asset still exists/,
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
 
 test("save restores the previous current state when upload verification fails", async () => {
   const workspace = mkdtempSync(

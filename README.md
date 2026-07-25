@@ -209,11 +209,12 @@ pnpm build
 The implementation is split by responsibility:
 
 - `src/config.mts` parses and validates the action inputs;
-- `src/backups.mts` identifies backup assets and metadata files;
+- `src/asset-names.mts` owns current, backup, and metadata asset names;
+- `src/backup-manager.mts` creates and retains backup assets;
 - `src/github-api.mts` contains the retrying GitHub Release/asset API adapter;
-- `src/marker.mts` owns checksums and optimistic-consistency markers;
-- `src/state-manager.mts` implements restore, save, backups, verification, and
-  retention;
+- `src/integrity.mts` owns asset digests and checksums;
+- `src/marker.mts` owns optimistic-consistency markers;
+- `src/state-manager.mts` implements restore, save, verification, and recovery;
 - `src/action-core.mts` contains the small GitHub Actions runtime adapter;
 - `src/main.mts` is only the operation dispatcher.
 
@@ -232,9 +233,8 @@ also be started manually. It creates a unique test Release and removes it in an
 
 Design records are available in [discovery](docs/discovery.md),
 [architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
-the [encryption proposal](docs/encryption-proposal.md), and the
-[preview API review](docs/api-review.md). They describe preview behavior only;
-no production migration is included.
+and the [preview API review](docs/api-review.md). They describe preview behavior
+only; no production migration is included.
 
 The action's security assumptions and residual risks are documented in the
 [threat model](docs/threat-model.md).

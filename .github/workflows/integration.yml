@@ -246,7 +246,7 @@ jobs:
         run: |
           asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate") | .id')
           gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/state.age"
-          ! grep -F 'encrypted-integration' "$RUNNER_TEMP/state.age"
+          ! grep -qF 'encrypted-integration' "$RUNNER_TEMP/state.age"
 
       - name: Restore encrypted disposable state
         if: success()
@@ -266,7 +266,7 @@ jobs:
 
       - name: Verify decrypted disposable state
         if: success()
-        run: grep -F 'encrypted-integration' "$STATE_TEST_PATH"
+        run: grep -qF 'encrypted-integration' "$STATE_TEST_PATH"
 
       - name: Cleanup disposable release with native reset
         if: always()

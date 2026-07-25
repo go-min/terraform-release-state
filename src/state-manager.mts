@@ -1,11 +1,7 @@
 import { existsSync } from "node:fs";
 import { core, fail } from "./action-core.mjs";
-import {
-  currentMetadataName,
-  isBackupAsset,
-  metadataAssetNames,
-} from "./backups.mjs";
-import { backupName } from "./backup-names.mjs";
+import { metadataName } from "./asset-names.mjs";
+import { createBackup, retainBackups } from "./backup-manager.mjs";
 import { decryptState, encryptState } from "./encryption.mjs";
 import {
   createRelease,
@@ -16,12 +12,12 @@ import {
   listAssets,
   uploadAsset,
 } from "./github-api.mjs";
+import { assetDigest, sha256 } from "./integrity.mjs";
 import {
   decodeMarker,
   marker,
   sameAssetMarker,
   sameMarker,
-  sha256,
 } from "./marker.mjs";
 import { createStateMetadata, parseStateMetadata } from "./state-metadata.mjs";
 import { readStateFile, writeStateFile } from "./state-files.mjs";
@@ -45,32 +41,21 @@ function emitOutputs(
   core.setOutput("remote-state-marker", marker(asset));
   if (asset) {
     core.setOutput("state-asset-id", asset.id);
-    core.setOutput(
-      "state-digest",
-      ((asset as Asset & { digest?: string }).digest || "").replace(
-        /^sha256:/,
-        "",
-      ),
-    );
+    core.setOutput("state-digest", assetDigest(asset));
   }
   if (data) core.setOutput("state-sha256", sha256(data));
 }
 
-async function ensureRelease(
-  context: StateManagerContext,
-): Promise<{ release: Release; created: boolean }> {
+async function ensureRelease(context: StateManagerContext): Promise<Release> {
   const { octokit, config } = context;
   const existing = await getRelease(octokit, config.target, config.tag);
-  if (existing) return { release: existing, created: false };
+  if (existing) return existing;
   if (!config.bootstrap) {
     fail(
       `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
     );
   }
-  return {
-    release: await createRelease(octokit, config.target, config.tag),
-    created: true,
-  };
+  return createRelease(octokit, config.target, config.tag);
 }
 
 async function loadCurrentMetadata(
@@ -79,7 +64,7 @@ async function loadCurrentMetadata(
   ciphertext: Buffer,
 ): Promise<CurrentMetadata | undefined> {
   const { octokit, config } = context;
-  const asset = findAsset(assets, currentMetadataName(config.assetName));
+  const asset = findAsset(assets, metadataName(config.assetName));
   if (!asset) {
     if (config.encryption.mode === "age") {
       fail("Encrypted state is missing current state metadata.");
@@ -100,10 +85,16 @@ async function loadCurrentMetadata(
 
 export async function restore(context: StateManagerContext): Promise<void> {
   const { octokit, config } = context;
-  const { release } = await ensureRelease(context);
+  const release = await ensureRelease(context);
   const assets = await listAssets(octokit, config.target, release.id);
   const asset = findAsset(assets, config.assetName);
+  const metadata = findAsset(assets, metadataName(config.assetName));
   if (!asset) {
+    if (metadata) {
+      fail(
+        `State asset ${config.assetName} is missing but its metadata asset still exists.`,
+      );
+    }
     if (!config.bootstrap) {
       fail(
         `State asset ${config.assetName} is missing from release ${config.tag}.`,
@@ -127,68 +118,6 @@ export async function restore(context: StateManagerContext): Promise<void> {
   emitOutputs("restore", release, asset, plaintext);
 }
 
-async function createBackup(
-  context: StateManagerContext,
-  release: Release,
-  current: Asset,
-  previous: Buffer,
-): Promise<string> {
-  const { octokit, config } = context;
-  const name = backupName(config.assetName, config.workflowRunId);
-  const metadata = Buffer.from(
-    `${JSON.stringify(
-      {
-        timestamp_utc: new Date().toISOString(),
-        source_commit:
-          config.sourceCommit || process.env.GITHUB_SHA || "unknown",
-        workflow_run_id:
-          config.workflowRunId || process.env.GITHUB_RUN_ID || "unknown",
-        action_version: process.env.GITHUB_ACTION_REF || "unknown",
-        current_asset: current.name,
-        encryption: config.encryption.mode,
-        sha256: sha256(previous),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await uploadAsset(octokit, config.target, release.id, name, previous);
-  await uploadAsset(
-    octokit,
-    config.target,
-    release.id,
-    `${name}.metadata.json`,
-    metadata,
-    "application/json",
-  );
-  return name;
-}
-
-async function retainBackups(
-  context: StateManagerContext,
-  assets: Asset[],
-): Promise<number> {
-  const { octokit, config } = context;
-  const backups = assets
-    .filter(
-      (asset) =>
-        asset.state === "uploaded" &&
-        isBackupAsset(asset.name, config.assetName),
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(right.created_at) - Date.parse(left.created_at),
-    );
-  for (const backup of backups.slice(config.backupRetention)) {
-    await deleteAsset(octokit, config.target, backup.id);
-    for (const metadataName of metadataAssetNames(backup.name)) {
-      const metadata = assets.find((asset) => asset.name === metadataName);
-      if (metadata) await deleteAsset(octokit, config.target, metadata.id);
-    }
-  }
-  return Math.min(backups.length, config.backupRetention);
-}
-
 async function recoverPreviousState(
   context: StateManagerContext,
   release: Release,
@@ -201,7 +130,7 @@ async function recoverPreviousState(
   const { octokit, config } = context;
   const assets = await listAssets(octokit, config.target, release.id);
   const current = findAsset(assets, config.assetName);
-  const metadata = findAsset(assets, currentMetadataName(config.assetName));
+  const metadata = findAsset(assets, metadataName(config.assetName));
   if (
     current &&
     previousAsset &&
@@ -242,7 +171,7 @@ async function recoverPreviousState(
       octokit,
       config.target,
       release.id,
-      currentMetadataName(config.assetName),
+      metadataName(config.assetName),
       previousMetadata.data,
       "application/json",
     );
@@ -260,7 +189,7 @@ export async function save(context: StateManagerContext): Promise<void> {
   const expected = config.expectedMarker
     ? decodeMarker(config.expectedMarker)
     : undefined;
-  const { release } = await ensureRelease(context);
+  const release = await ensureRelease(context);
   let assets = await listAssets(octokit, config.target, release.id);
   let current = findAsset(assets, config.assetName);
   const previousAsset = current;
@@ -273,37 +202,31 @@ export async function save(context: StateManagerContext): Promise<void> {
   if (expected === "absent" && current) {
     fail("Remote state appeared after restore; refusing to overwrite it.");
   }
-  if (
-    expected &&
-    expected !== "absent" &&
-    (!current || !sameMarker(expected, current))
-  ) {
-    fail("Remote state changed after restore; refusing to overwrite it.");
-  }
-  if (!current && expected && expected !== "absent") {
-    fail("Remote state disappeared after restore; refusing to recreate it.");
+  if (expected && expected !== "absent") {
+    if (!current) {
+      fail("Remote state disappeared after restore; refusing to recreate it.");
+    }
+    if (!sameMarker(expected, current)) {
+      fail("Remote state changed after restore; refusing to overwrite it.");
+    }
   }
   if (!current && !config.bootstrap && expected !== "absent") {
     fail("Current state is missing; refusing implicit bootstrap.");
   }
 
   const bootstrapped = !current && config.bootstrap;
-  const previous = current
-    ? await downloadAsset(octokit, config.target, current)
-    : undefined;
-  const previousMetadata = current
-    ? await loadCurrentMetadata(context, assets, previous as Buffer)
-    : undefined;
-  const backup = current
-    ? await createBackup(context, release, current, previous as Buffer)
-    : "";
+  let previous: Buffer | undefined;
+  let previousMetadata: CurrentMetadata | undefined;
+  let backup = "";
+  if (current) {
+    previous = await downloadAsset(octokit, config.target, current);
+    previousMetadata = await loadCurrentMetadata(context, assets, previous);
+    backup = await createBackup(context, release, current, previous);
+  }
 
   assets = await listAssets(octokit, config.target, release.id);
   const latest = findAsset(assets, config.assetName);
-  const latestMetadata = findAsset(
-    assets,
-    currentMetadataName(config.assetName),
-  );
+  const latestMetadata = findAsset(assets, metadataName(config.assetName));
   if (current && (!latest || !sameAssetMarker(current, latest))) {
     fail("Remote state changed during save; refusing to overwrite it.");
   }
@@ -345,14 +268,14 @@ export async function save(context: StateManagerContext): Promise<void> {
         octokit,
         config.target,
         release.id,
-        currentMetadataName(config.assetName),
+        metadataName(config.assetName),
         createStateMetadata(data),
         "application/json",
       );
     }
     assets = await listAssets(octokit, config.target, release.id);
     current = findAsset(assets, config.assetName);
-    const metadata = findAsset(assets, currentMetadataName(config.assetName));
+    const metadata = findAsset(assets, metadataName(config.assetName));
     if (!current) {
       fail(`Uploaded state asset ${config.assetName} could not be found.`);
     }

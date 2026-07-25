@@ -12,12 +12,12 @@ reviewable and lets tests use mock Octokit clients without a live Release.
 
 ## Alternatives considered
 
-| Approach                              | Advantages                                                                                    | Costs / decision                                                                                            |
-| ------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| TypeScript Node action with Octokit   | Portable on GitHub runners, typed API, one runtime dependency, easy bundling and native tests | Requires committed generated bundle; **selected**                                                           |
-| Composite action using `gh` and shell | Small initial YAML, familiar CLI                                                              | External CLI/runtime assumptions, difficult binary/state handling, weaker error and retry control; rejected |
-| Docker action                         | Reproducible OS and dependencies                                                              | Slow startup, larger supply-chain surface, less portable to runner constraints; rejected                    |
-| Terraform backend/provider            | Native Terraform locking and lifecycle                                                        | Different product boundary, more infrastructure, cannot preserve Release asset workflow; out of scope       |
+| Approach                              | Advantages                                                                                          | Costs / decision                                                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| TypeScript Node action with Octokit   | Portable on GitHub runners, typed API, minimal runtime dependencies, easy bundling and native tests | Requires committed generated bundle; **selected**                                                           |
+| Composite action using `gh` and shell | Small initial YAML, familiar CLI                                                                    | External CLI/runtime assumptions, difficult binary/state handling, weaker error and retry control; rejected |
+| Docker action                         | Reproducible OS and dependencies                                                                    | Slow startup, larger supply-chain surface, less portable to runner constraints; rejected                    |
+| Terraform backend/provider            | Native Terraform locking and lifecycle                                                              | Different product boundary, more infrastructure, cannot preserve Release asset workflow; out of scope       |
 
 ## API and data flow
 
@@ -35,8 +35,10 @@ state/backup namespace.
 
 ## Reliability model
 
-- Retry idempotent reads/deletes for `429` and transient `5xx` API responses
-  with bounded exponential delay.
+- Retry idempotent reads/deletes for rate-limit `403`/`429` and transient `5xx`
+  API responses with bounded delay. Respect GitHub's `Retry-After` and primary
+  rate-limit reset headers without converting ordinary permission `403` errors
+  into retries.
 - Do not blindly retry create/upload POSTs. After an ambiguous POST failure,
   inspect the target Release/asset and accept it only when it is the intended
   resource with the expected content.
@@ -48,6 +50,9 @@ state/backup namespace.
 - Treat Release asset replacement as non-atomic. If upload or verification
   fails after deletion, attempt to restore the prior current asset without
   overwriting a concurrently changed replacement.
+- Treat every backup and its `.metadata.json` as a pair. Compensate a partial
+  metadata upload, remove orphaned pair members, and delete metadata before its
+  backup so failed retention remains safely retryable.
 
 ## Versioning and review
 

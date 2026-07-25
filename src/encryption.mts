@@ -24,11 +24,11 @@ function unique(values: string, label: string, pattern: RegExp): string[] {
   return parsed;
 }
 
-export function parseRecipients(value: string): string[] {
+function parseRecipients(value: string): string[] {
   return unique(value, "age-recipients", /^age1[ac-hj-np-z02-9]+$/);
 }
 
-export function parseIdentities(value: string): string[] {
+function parseIdentities(value: string): string[] {
   return unique(value, "age-identities", /^AGE-SECRET-KEY-1[AC-HJ-NP-Z02-9]+$/);
 }
 
