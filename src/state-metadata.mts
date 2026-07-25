@@ -1,7 +1,7 @@
-import { sha256 } from "./marker.mjs";
+import { sha256 } from "./integrity.mjs";
 import type { EncryptionMode } from "./types.mjs";
 
-export type StateMetadata = {
+type StateMetadata = {
   format_version: 1;
   encryption: "age";
   ciphertext_sha256: string;

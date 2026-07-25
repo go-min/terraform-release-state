@@ -1,36 +1,50 @@
 # Threat model
 
-## Assets and trust boundaries
+## Protected assets
 
-The protected assets are Terraform state, GitHub tokens, recovery metadata, and
-the dedicated state Release/tag. The action trusts the consumer workflow's
-approved inputs, GitHub Actions runtime, and token scope. It does not trust
-state-path components, remote Release assets, API responses after transient
-failures, or concurrent writers.
+- Terraform state and encrypted backups;
+- GitHub tokens and age identities;
+- recovery metadata and optimistic consistency markers;
+- the dedicated state Release and tag.
 
-## Controls
+## Trust boundaries
 
-- State paths are restricted to real, non-symlink workspace directories and
-  regular files.
-- State files are written through a `0600` temporary file and atomically renamed.
-- Restore/save use opaque remote markers and fail closed on state changes.
-- Downloads verify GitHub asset digests when available; uploads are downloaded
-  and checked before success is reported.
-- Backup assets and metadata remain in a dedicated namespace; reset validates
-  that namespace before deletion and rechecks it before deleting the Release.
-- Delete 404s are idempotent; create/upload ambiguity is reconciled by inspecting
-  the remote resource rather than retrying a non-idempotent POST blindly.
-- State, credentials, and keys are never logged or returned through outputs.
-- Encrypted state uses age ciphertext plus versioned current metadata; missing
-  or incompatible metadata fails closed instead of falling back to plaintext.
+The action trusts the reviewed consumer workflow, GitHub Actions runtime, and
+the permissions intentionally granted to its token. It does not trust local
+path components, remote assets, caller-provided names, API results after
+ambiguous failures, or concurrent writers.
+
+## Threats and controls
+
+| Threat                              | Control                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| State or credential disclosure      | No state/key outputs; workflow commands escaped; secret inputs masked      |
+| Path traversal or symlink escape    | Workspace-relative validation, real-directory checks, regular files only   |
+| Corrupt or substituted asset        | GitHub digest, local SHA-256, upload download-verification, bound metadata |
+| Stale or concurrent writer          | Consumer concurrency plus opaque restore/save marker checks                |
+| Implicit empty-state recreation     | Explicit bootstrap; access and integrity errors remain failures            |
+| Partial replacement                 | Paired backup plus guarded recovery from the downloaded previous state     |
+| Backup pair corruption              | Paired metadata, compensation, orphan cleanup, metadata-first retention    |
+| Over-broad reset                    | Exact confirmation, namespace audit, post-delete audit                     |
+| Ambiguous non-idempotent API result | Remote reconciliation before accepting create/upload success               |
+| Dependency compromise               | Pinned packages/actions, lockfile, dependency review, CodeQL, Dependabot   |
+
+Encrypted state uses the interoperable age format with native X25519
+recipients. Identities are masked line-by-line and remain in memory; the action
+does not write them to files or outputs.
 
 ## Residual risks
 
-- GitHub Release asset replacement is not atomic. A verified backup is the
-  recovery source if replacement or recovery fails.
-- The action cannot provide workflow-level locking; consumers must configure a
-  shared concurrency group with `cancel-in-progress: false`.
-- Plain state assets can contain secrets. Encrypted state still requires secure
-  recipient/identity rotation and protection of GitHub Actions secrets.
-- Filesystem checks reduce symlink traversal but cannot replace an isolated,
-  trusted runner and reviewed workflow inputs.
+- GitHub Release replacement is not atomic and does not provide native backend
+  transactions or locking.
+- Plain state assets may contain secrets and rely entirely on repository access
+  controls.
+- A lost age identity makes matching state and backups unrecoverable.
+- A compromised workflow or runner can access local plaintext state and any
+  credentials intentionally provided to it.
+- Filesystem checks reduce path attacks but cannot make an untrusted
+  self-hosted runner safe.
+
+Consumers must use a shared concurrency group with `cancel-in-progress: false`,
+least-privilege credentials, reviewed workflows, and protected environments for
+destructive recovery.

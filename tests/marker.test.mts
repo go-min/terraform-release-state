@@ -1,13 +1,13 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import {
-  assetDigest,
-  decodeMarker,
-  marker,
-  sameMarker,
-  sha256,
-  // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-} from "../src/marker.mts";
+const { decodeMarker, marker, sameMarker } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/marker.mjs"
+);
+const { assetDigest, sha256 } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/integrity.mjs"
+);
 
 const asset = {
   id: 42,

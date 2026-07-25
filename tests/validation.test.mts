@@ -42,6 +42,10 @@ test("validates action inputs", async (t) => {
       resolveStatePath("state/terraform.tfstate", "/workspace"),
       "/workspace/state/terraform.tfstate",
     );
+    assert.equal(
+      resolveStatePath("..state/terraform.tfstate", "/workspace"),
+      "/workspace/..state/terraform.tfstate",
+    );
     assert.throws(
       () => resolveStatePath("../terraform.tfstate", "/workspace"),
       /inside/,

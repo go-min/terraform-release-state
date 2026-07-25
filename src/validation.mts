@@ -1,4 +1,14 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
+export function isPathInside(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  );
+}
 
 export function parseBoolean(value: string, name: string): boolean {
   if (value === "true") return true;
@@ -32,8 +42,7 @@ export function resolveStatePath(value: string, workspace: string): string {
   if (!value || value.includes("\0"))
     throw new Error("state-path must be a non-empty path.");
   const absolute = resolve(workspace, value);
-  const relativePath = relative(workspace, absolute);
-  if (isAbsolute(relativePath) || relativePath.startsWith("..")) {
+  if (!isPathInside(workspace, absolute)) {
     throw new Error("state-path must remain inside GITHUB_WORKSPACE.");
   }
   return absolute;
@@ -41,5 +50,5 @@ export function resolveStatePath(value: string, workspace: string): string {
 
 export function validateReleaseComponent(value: string, name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value))
-    throw new Error(`${name} contain unsupported characters.`);
+    throw new Error(`${name} contains unsupported characters.`);
 }

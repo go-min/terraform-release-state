@@ -9,27 +9,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isPathInside } from "./validation.mjs";
 
 function fail(message: string): never {
   throw new Error(message);
 }
 
-function isInside(root: string, path: string): boolean {
-  const pathRelative = relative(root, path);
-  return (
-    pathRelative === "" ||
-    (pathRelative !== ".." &&
-      !pathRelative.startsWith(`..${sep}`) &&
-      !isAbsolute(pathRelative))
-  );
-}
-
 function stateDirectory(path: string, workspace: string): string {
   const workspacePath = resolve(workspace);
   const pathRelative = relative(workspacePath, path);
-  if (!isInside(workspacePath, path)) {
+  if (!isPathInside(workspacePath, path)) {
     fail("state-path must remain inside GITHUB_WORKSPACE.");
   }
 
@@ -47,7 +38,7 @@ function stateDirectory(path: string, workspace: string): string {
       );
     }
     current = realpathSync(candidate);
-    if (!isInside(root, current)) {
+    if (!isPathInside(root, current)) {
       fail("state-path must remain inside GITHUB_WORKSPACE.");
     }
   }
@@ -77,7 +68,7 @@ export function writeStateFile(
 ): void {
   const file = stateFile(path, workspace);
   const temporary = join(
-    join(file, ".."),
+    dirname(file),
     `.${basename(file)}.${randomUUID()}.tmp`,
   );
   try {

@@ -1,57 +1,76 @@
 # Architecture
 
-## Recommendation
+Terraform Release State is a Node.js 24 action that manages one Terraform state
+namespace in a dedicated GitHub Release. It does not execute Terraform or
+provide workflow locking.
 
-Keep the action as a TypeScript `.mts` Node 24 action compiled into a committed
-`dist/index.js` bundle. Use `@actions/github` for the GitHub REST API and keep
-GitHub API calls behind `src/github-api.mts`.
-
-The lifecycle is split into restore/save/reset orchestration, pure marker and
-validation logic, and a small runtime adapter. This keeps destructive behavior
-reviewable and lets tests use mock Octokit clients without a live Release.
-
-## Alternatives considered
-
-| Approach                              | Advantages                                                                                    | Costs / decision                                                                                            |
-| ------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| TypeScript Node action with Octokit   | Portable on GitHub runners, typed API, one runtime dependency, easy bundling and native tests | Requires committed generated bundle; **selected**                                                           |
-| Composite action using `gh` and shell | Small initial YAML, familiar CLI                                                              | External CLI/runtime assumptions, difficult binary/state handling, weaker error and retry control; rejected |
-| Docker action                         | Reproducible OS and dependencies                                                              | Slow startup, larger supply-chain surface, less portable to runner constraints; rejected                    |
-| Terraform backend/provider            | Native Terraform locking and lifecycle                                                        | Different product boundary, more infrastructure, cannot preserve Release asset workflow; out of scope       |
-
-## API and data flow
+## System boundary
 
 ```text
 consumer workflow
-  restore -> local state + opaque marker
-  Terraform execution (consumer-owned)
-  save    -> marker check -> backup -> replace -> verify -> retain
-  reset   -> exact confirmation -> namespace audit -> delete assets -> re-audit -> release -> tag
+  restore ──> verified local state + opaque remote marker
+      │
+      └────> Terraform execution (consumer-owned)
+                  │
+  save <──────────┘ marker check -> backup -> replace -> verify -> retain
+
+  reset ──> confirmation -> namespace audit -> assets -> Release -> tag
 ```
 
-The action never returns state contents. Reset audits all assets before the first
-delete and refuses a Release containing assets outside the configured current
-state/backup namespace.
+The consumer owns Terraform commands, cloud credentials, concurrency,
+approvals, and environments. The action owns Release lookup, state transfer,
+integrity, backups, retention, encryption, and reset.
 
-## Reliability model
+## Components
 
-- Retry idempotent reads/deletes for `429` and transient `5xx` API responses
-  with bounded exponential delay.
-- Do not blindly retry create/upload POSTs. After an ambiguous POST failure,
-  inspect the target Release/asset and accept it only when it is the intended
-  resource with the expected content.
-- Treat delete `404` as idempotent success.
-- Verify downloaded assets against GitHub's digest when available.
-- Verify an uploaded current asset by downloading it again.
-- Preserve optimistic consistency checks even when the consumer also uses
-  workflow concurrency.
-- Treat Release asset replacement as non-atomic. If upload or verification
-  fails after deletion, attempt to restore the prior current asset without
-  overwriting a concurrently changed replacement.
+| Component            | Responsibility                                              |
+| -------------------- | ----------------------------------------------------------- |
+| `config.mts`         | Parse and validate the action contract                      |
+| `github-api.mts`     | GitHub Release API, pagination, retries, and reconciliation |
+| `state-manager.mts`  | Restore, save, consistency, verification, and recovery      |
+| `backup-manager.mts` | Backup pairs, compensation, orphan cleanup, and retention   |
+| `reset-core.mts`     | Fail-closed reset policy independent of the API adapter     |
+| `encryption.mts`     | Native X25519 age encryption and decryption                 |
+| `state-files.mts`    | Workspace containment and secure atomic local writes        |
+| `main.mts`           | Runtime dispatch                                            |
 
-## Versioning and review
+The TypeScript `.mts` source is bundled into committed `dist/index.js` for a
+dependency-free consumer experience. Runtime packages are limited to
+`@actions/github` and `age-encryption`.
 
-The project remains preview-only. Inputs and outputs may change before `v1`.
-Preview tags are immutable release milestones; stable `v1` requires explicit
-API review and successful integration coverage. Consumers should pin a commit
-SHA. No production migration is part of this change.
+## Consistency and integrity
+
+Restore returns an opaque marker containing the remote asset identity. Save
+requires that marker for an existing state and checks it before replacement and
+again after backup creation. A changed, missing, or newly appeared asset aborts
+the operation.
+
+Downloads are checked against GitHub's digest when available. Current state
+uploads are downloaded and hashed before success is reported. Encrypted state
+adds versioned metadata bound to the ciphertext checksum.
+
+## Failure handling
+
+- Idempotent reads and deletes retry transient network failures, `408`/`5xx`,
+  and rate-limit `403`/`429` responses with bounded delays and GitHub
+  rate-limit headers.
+- Permission `403` responses are not retried or treated as missing state.
+- Create and upload requests are not blindly repeated. After an ambiguous
+  failure, the action accepts only an existing resource with expected content.
+- Delete `404` responses are idempotent success.
+- Replacement failure triggers guarded recovery of the previous state.
+- Backup and metadata assets are managed as pairs. Partial creation is
+  compensated; retention removes orphans and deletes metadata first so retries
+  remain safe.
+
+Release asset replacement is not atomic. The paired backup and guarded recovery
+path reduce risk but do not provide backend-style transactions.
+
+## Verification
+
+Unit tests use the Node.js native test runner and mock the GitHub API. The
+disposable integration workflow uses a unique Release tag and validates the
+live bootstrap, Release description, consistency conflict, backup retention,
+encrypted metadata integrity, recovery guard, and reset contracts. Native reset
+runs in an `always()` cleanup step. Integration runs after every push to `main`
+and can also be started manually.

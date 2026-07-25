@@ -12,14 +12,6 @@ import {
 } from "./reset-core.mjs";
 import type { StateManagerContext } from "./types.mjs";
 
-export {
-  RESET_CONFIRMATION,
-  isResetAsset,
-  resetAssets,
-  validateResetConfirmation,
-} from "./reset-core.mjs";
-export type { ResetClient, ResetResult } from "./reset-core.mjs";
-
 export async function reset(
   context: StateManagerContext,
 ): Promise<ResetResult> {

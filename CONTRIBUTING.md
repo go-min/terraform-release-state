@@ -7,10 +7,29 @@
 > - There is no review or merge timeline.
 > - Forks are welcome for different workflows or priorities.
 
-1. Run `pnpm install --frozen-lockfile`.
-2. Run `pnpm typecheck`, `pnpm test`, `pnpm format:check`, and `pnpm lint`.
-3. Run `pnpm build` and commit the generated `dist/` bundle.
-4. Keep state contents, credentials, and production Release assets out of tests.
+## Development
 
-Use disposable Release tags for integration tests. Do not publish a stable
-version without API review and successful integration coverage.
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm format:check
+pnpm lint
+pnpm build
+```
+
+Use Node.js 24, TypeScript `.mts`, the Node.js native test runner, and Biome. Do
+not add a test framework. Commit the generated `dist/` bundle whenever source
+changes affect runtime behavior.
+
+## Change requirements
+
+- Preserve optimistic consistency and fail-closed bootstrap behavior.
+- Never log or output state, credentials, tokens, or private keys.
+- Keep state paths workspace-relative and backup metadata in `.metadata.json`.
+- Pin dependency changes in both `package.json` and `pnpm-lock.yaml`.
+- Use disposable Release tags for integration tests and always clean them up.
+- Document public API, state format, encryption, and recovery changes.
+
+Release, publication, and production integration changes require explicit
+maintainer approval.
