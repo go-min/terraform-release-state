@@ -2,6 +2,11 @@
 
 Store, restore, verify, and back up Terraform state using GitHub Release assets.
 
+> [!NOTE]
+> This project is maintained primarily for the organization's own use and
+> shared as-is. It has no public support, roadmap, or response-time
+> commitments. Forks are welcome for different workflows or priorities.
+
 > **This is not a native Terraform backend.** The action provides Terraform
 > state storage through GitHub Release assets. The consumer workflow remains
 > responsible for concurrency locking, Terraform execution, credentials, and
