@@ -226,9 +226,9 @@ The generated `dist/` bundle must be committed with action changes. Consumers
 should pin the action to an immutable commit SHA. Stable `v1` will not be created
 until the API and integration tests are reviewed.
 
-The disposable integration workflow is manual-only. It creates a unique test
-Release and removes it in an `always()` cleanup step; it never uses the
-`terraform-state` production tag.
+The disposable integration workflow runs after every push to `main` and can
+also be started manually. It creates a unique test Release and removes it in an
+`always()` cleanup step; it never uses the `terraform-state` production tag.
 
 Design records are available in [discovery](docs/discovery.md),
 [architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
