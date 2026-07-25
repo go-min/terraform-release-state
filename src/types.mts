@@ -21,12 +21,21 @@ export type RepositoryTarget = {
   repo: string;
 };
 
+export type EncryptionMode = "none" | "age";
+
+export type EncryptionConfig = {
+  mode: EncryptionMode;
+  recipients: string[];
+  identities: string[];
+};
+
 export type ActionConfig = {
   operation: "restore" | "save" | "reset";
   token: string;
   target: RepositoryTarget;
   tag: string;
   assetName: string;
+  workspace: string;
   statePath: string;
   bootstrap: boolean;
   expectedMarker: string;
@@ -34,6 +43,7 @@ export type ActionConfig = {
   sourceCommit: string;
   workflowRunId: string;
   resetConfirmation: string;
+  encryption: EncryptionConfig;
 };
 
 export type StateManagerContext = {

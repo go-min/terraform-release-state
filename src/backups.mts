@@ -1,9 +1,16 @@
 const METADATA_SUFFIX = ".metadata.json";
 
-export function isBackupAsset(assetName: string, stateAssetName: string): boolean {
+export function currentMetadataName(assetName: string): string {
+  return `${assetName}${METADATA_SUFFIX}`;
+}
+
+export function isBackupAsset(
+  assetName: string,
+  stateAssetName: string,
+): boolean {
   return (
     assetName.startsWith(`${stateAssetName}.backup-`) &&
-    !assetName.includes(".metadata.")
+    !assetName.endsWith(".metadata.json")
   );
 }
 

@@ -7,6 +7,7 @@ import {
   resolveStatePath,
   validateReleaseComponent,
 } from "./validation.mjs";
+import { readEncryptionConfig } from "./encryption.mjs";
 import type { ActionConfig } from "./types.mjs";
 
 export function readConfig(): ActionConfig {
@@ -16,7 +17,11 @@ export function readConfig(): ActionConfig {
   const operation = core
     .getInput("operation", { required: true })
     .toLowerCase();
-  if (operation !== "restore" && operation !== "save" && operation !== "reset") {
+  if (
+    operation !== "restore" &&
+    operation !== "save" &&
+    operation !== "reset"
+  ) {
     fail("operation must be restore, save, or reset.");
   }
 
@@ -29,6 +34,16 @@ export function readConfig(): ActionConfig {
   validateReleaseComponent(assetName, "state-asset");
 
   const workspace = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
+  const ageIdentities = core.getInput("age-identities");
+  if (ageIdentities) core.setSecret(ageIdentities);
+  const encryption = readEncryptionConfig(
+    core.getInput("encryption").toLowerCase(),
+    core.getInput("age-recipients"),
+    ageIdentities,
+  );
+  if (operation === "reset" && encryption.mode !== "none") {
+    fail("reset does not accept encryption inputs.");
+  }
   const statePathInput = core.getInput("state-path");
   if (operation !== "reset" && !statePathInput) {
     fail("state-path is required for restore and save.");
@@ -39,15 +54,14 @@ export function readConfig(): ActionConfig {
     target,
     tag,
     assetName,
-    statePath: resolveStatePath(
-      statePathInput || ".",
-      workspace,
-    ),
+    workspace,
+    statePath: resolveStatePath(statePathInput || ".", workspace),
     bootstrap: parseBoolean(core.getInput("bootstrap"), "bootstrap"),
     expectedMarker: core.getInput("expected-remote-state-marker"),
     backupRetention: parseRetention(core.getInput("backup-retention")),
     sourceCommit: core.getInput("source-commit"),
     workflowRunId: core.getInput("workflow-run-id"),
     resetConfirmation: core.getInput("confirmation"),
+    encryption,
   };
 }

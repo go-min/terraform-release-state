@@ -17,6 +17,9 @@ describe("action metadata", () => {
     assert.match(metadata, /remote-state-marker:/);
     assert.match(metadata, /State operation: restore, save, or reset/);
     assert.match(metadata, /confirmation:/);
+    assert.match(metadata, /encryption:/);
+    assert.match(metadata, /age-recipients:/);
+    assert.match(metadata, /age-identities:/);
     assert.match(metadata, /state-path:[\s\S]*required: false/);
   });
 });

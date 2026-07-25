@@ -1,4 +1,10 @@
-import type { Asset, Release, RepositoryTarget, StateManagerContext } from "./types.mjs";
+import type {
+  Asset,
+  Release,
+  RepositoryTarget,
+  StateManagerContext,
+} from "./types.mjs";
+import { currentMetadataName } from "./backups.mjs";
 
 export const RESET_CONFIRMATION = "RESET";
 
@@ -10,9 +16,14 @@ export function validateResetConfirmation(value: string): void {
   }
 }
 
-export function isResetAsset(assetName: string, stateAssetName: string): boolean {
+export function isResetAsset(
+  assetName: string,
+  stateAssetName: string,
+): boolean {
   return (
-    assetName === stateAssetName || assetName.startsWith(`${stateAssetName}.backup-`)
+    assetName === stateAssetName ||
+    assetName === currentMetadataName(stateAssetName) ||
+    assetName.startsWith(`${stateAssetName}.backup-`)
   );
 }
 
@@ -25,7 +36,9 @@ export function resetAssets(
   );
   return {
     owned,
-    unexpected: assets.filter((asset) => !isResetAsset(asset.name, stateAssetName)),
+    unexpected: assets.filter(
+      (asset) => !isResetAsset(asset.name, stateAssetName),
+    ),
   };
 }
 
@@ -70,6 +83,12 @@ export async function resetWithClient(
 
   for (const asset of owned) {
     await client.deleteAsset(config.target, asset.id);
+  }
+  const remaining = await client.listAssets(config.target, release.id);
+  if (remaining.length > 0) {
+    throw new Error(
+      `Refusing reset: release ${config.tag} changed during reset; no release or tag was deleted.`,
+    );
   }
   await client.deleteRelease(config.target, release.id);
   await client.deleteTag(config.target, config.tag);

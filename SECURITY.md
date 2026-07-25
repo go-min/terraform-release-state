@@ -6,10 +6,16 @@ state contents.
 
 The action never logs state or credentials and does not expose state through
 outputs. Consumers must provide the minimum token scope needed by the operation:
-Contents read for restore and Contents write for save, backup, and retention.
+Contents read for restore and Contents write for save, backup, retention, and
+reset. Reset also deletes the configured Release tag.
 
 The action does not provide locking. Consumer workflows must use a shared
 concurrency group with `cancel-in-progress: false`.
+
+For `encryption: age`, store `age-identities` only in GitHub Actions secrets or
+an external secret manager. The action masks the input and never writes or
+returns identities. Do not use passphrases, repository variables, artifacts, or
+command-line arguments for private key material.
 
 The repository pins direct package versions and GitHub Actions to immutable
 commit SHAs. Pull requests receive dependency review, and the repository runs

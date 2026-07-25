@@ -11,7 +11,8 @@ recovery. The action requires the exact value `confirmation: RESET` and
 fails before making API changes when confirmation is absent or different.
 
 Reset targets only the configured repository, Release tag, current state asset,
-backup assets, and matching `.metadata.json` files. It first lists all Release
+its current `.metadata.json` record when encrypted, backup assets, and matching
+`.metadata.json` files. It first lists all Release
 assets and refuses to proceed if an unexpected asset is present. This prevents
 an accidentally shared Release from being deleted.
 
@@ -19,8 +20,9 @@ The deletion sequence is:
 
 1. list all assets with GitHub API pagination;
 2. delete the current state and backup assets;
-3. delete the Release;
-4. delete the tag reference.
+3. list assets again and stop if any appeared during deletion;
+4. delete the Release;
+5. delete the tag reference.
 
 Each delete treats HTTP 404 as already absent and retries transient API errors.
 If a later delete fails, rerun the same confirmed reset. Already-deleted assets
@@ -59,6 +61,9 @@ which must be persisted with a subsequent `save`.
 ## Production safeguards
 
 - Do not use reset as an automatic response to a missing or corrupt state.
+- For encrypted state, retain an age identity capable of decrypting every
+  backup through the configured retention window; a missing identity is not
+  recoverable through GitHub access alone.
 - Keep Terraform and reset jobs in separate approval paths.
 - Use a short-lived GitHub App installation token where possible.
 - Keep the consumer workflow's concurrency group with

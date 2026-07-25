@@ -26,7 +26,7 @@ consumer workflow
   restore -> local state + opaque marker
   Terraform execution (consumer-owned)
   save    -> marker check -> backup -> replace -> verify -> retain
-  reset   -> exact confirmation -> namespace audit -> delete assets -> release -> tag
+  reset   -> exact confirmation -> namespace audit -> delete assets -> re-audit -> release -> tag
 ```
 
 The action never returns state contents. Reset audits all assets before the first
@@ -35,13 +35,19 @@ state/backup namespace.
 
 ## Reliability model
 
-- Retry `429` and transient `5xx` API responses with bounded exponential delay.
+- Retry idempotent reads/deletes for `429` and transient `5xx` API responses
+  with bounded exponential delay.
+- Do not blindly retry create/upload POSTs. After an ambiguous POST failure,
+  inspect the target Release/asset and accept it only when it is the intended
+  resource with the expected content.
 - Treat delete `404` as idempotent success.
 - Verify downloaded assets against GitHub's digest when available.
 - Verify an uploaded current asset by downloading it again.
 - Preserve optimistic consistency checks even when the consumer also uses
   workflow concurrency.
-- Treat Release asset replacement as non-atomic and document backup recovery.
+- Treat Release asset replacement as non-atomic. If upload or verification
+  fails after deletion, attempt to restore the prior current asset without
+  overwriting a concurrently changed replacement.
 
 ## Versioning and review
 

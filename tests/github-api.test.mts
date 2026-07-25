@@ -5,6 +5,7 @@ import {
   deleteRelease,
   deleteTag,
   downloadAsset,
+  createRelease,
   getRelease,
   listAssets,
   uploadAsset,
@@ -12,18 +13,31 @@ import {
 } from "../src/github-api.mts";
 
 const target = { owner: "ter-sh", repo: "state" };
-const failure = (status: number) => Object.assign(new Error(`HTTP ${status}`), { status });
+const failure = (status: number) =>
+  Object.assign(new Error(`HTTP ${status}`), { status });
 
 test("getRelease treats a missing release as absent", async () => {
   const octokit = {
-    rest: { repos: { getReleaseByTag: async () => { throw failure(404); } } },
+    rest: {
+      repos: {
+        getReleaseByTag: async () => {
+          throw failure(404);
+        },
+      },
+    },
   } as never;
   assert.equal(await getRelease(octokit, target, "terraform-state"), undefined);
 });
 
 test("getRelease preserves permission errors", async () => {
   const octokit = {
-    rest: { repos: { getReleaseByTag: async () => { throw failure(403); } } },
+    rest: {
+      repos: {
+        getReleaseByTag: async () => {
+          throw failure(403);
+        },
+      },
+    },
   } as never;
   await assert.rejects(
     getRelease(octokit, target, "terraform-state"),
@@ -42,7 +56,9 @@ test("listAssets uses pagination through the internal API client", async () => {
   } as never;
   const assets = await listAssets(octokit, target, 12);
   assert.equal(assets.length, 2);
-  assert.deepEqual(calls, [["list", { ...target, release_id: 12, per_page: 100 }]]);
+  assert.deepEqual(calls, [
+    ["list", { ...target, release_id: 12, per_page: 100 }],
+  ]);
 });
 
 test("deletions retry transient failures", async () => {
@@ -71,7 +87,8 @@ test("downloadAsset rejects a digest mismatch without exposing content", async (
     id: 1,
     name: "terraform.tfstate",
     size: 10,
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    digest:
+      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   } as never;
   await assert.rejects(
     downloadAsset(octokit, target, asset),
@@ -92,15 +109,72 @@ test("uploadAsset uses the release asset API and content length", async () => {
     },
   } as never;
   const data = Buffer.from("state");
-  const result = await uploadAsset(octokit, target, 12, "terraform.tfstate", data);
+  const result = await uploadAsset(
+    octokit,
+    target,
+    12,
+    "terraform.tfstate",
+    data,
+  );
   assert.deepEqual(result, { id: 3, name: "terraform.tfstate" });
   assert.deepEqual(request, {
     ...target,
     release_id: 12,
     name: "terraform.tfstate",
     data: data as unknown as string,
-    headers: { "content-type": "application/octet-stream", "content-length": 5 },
+    headers: {
+      "content-type": "application/octet-stream",
+      "content-length": 5,
+    },
   });
+});
+
+test("createRelease reconciles a release created before an ambiguous error", async () => {
+  const octokit = {
+    rest: {
+      repos: {
+        createRelease: async () => {
+          throw failure(422);
+        },
+        getReleaseByTag: async () => ({
+          data: { id: 12, tag_name: "terraform-state" },
+        }),
+      },
+    },
+  } as never;
+  assert.deepEqual(await createRelease(octokit, target, "terraform-state"), {
+    id: 12,
+    tag_name: "terraform-state",
+  });
+});
+
+test("uploadAsset reconciles an asset created before an ambiguous error", async () => {
+  const data = Buffer.from("state");
+  const octokit = {
+    paginate: async () => [
+      {
+        id: 3,
+        name: "terraform.tfstate",
+        state: "uploaded",
+        size: data.length,
+        digest:
+          "sha256:4ba69735ca53765ed6a709edb56c6ea236b7193a3b29a6b390c346f0f4340e4e",
+      },
+    ],
+    request: async () => ({ data }),
+    rest: {
+      repos: {
+        listReleaseAssets: "list",
+        uploadReleaseAsset: async () => {
+          throw failure(503);
+        },
+      },
+    },
+  } as never;
+  assert.equal(
+    (await uploadAsset(octokit, target, 12, "terraform.tfstate", data)).id,
+    3,
+  );
 });
 
 test("retry stops after the bounded transient retry budget", async () => {
@@ -123,10 +197,18 @@ test("deletions treat 404 as already absent", async () => {
   const octokit = {
     rest: {
       repos: {
-        deleteReleaseAsset: async () => { throw failure(404); },
-        deleteRelease: async () => { throw failure(404); },
+        deleteReleaseAsset: async () => {
+          throw failure(404);
+        },
+        deleteRelease: async () => {
+          throw failure(404);
+        },
       },
-      git: { deleteRef: async () => { throw failure(404); } },
+      git: {
+        deleteRef: async () => {
+          throw failure(404);
+        },
+      },
     },
   } as never;
   await deleteAsset(octokit, target, 1);
@@ -137,7 +219,11 @@ test("deletions treat 404 as already absent", async () => {
 test("non-retryable deletion failures remain errors", async () => {
   const octokit = {
     rest: {
-      repos: { deleteReleaseAsset: async () => { throw failure(403); } },
+      repos: {
+        deleteReleaseAsset: async () => {
+          throw failure(403);
+        },
+      },
     },
   } as never;
   await assert.rejects(deleteAsset(octokit, target, 1), /HTTP 403/);

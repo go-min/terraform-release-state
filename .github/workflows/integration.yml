@@ -26,7 +26,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run mocked API failure coverage
-        run: node --experimental-strip-types --test tests/github-api.test.mts tests/reset.test.mts
+        run: pnpm test
       - run: mkdir -p test-state
 
       - name: Restore missing state with explicit bootstrap
@@ -212,6 +212,58 @@ jobs:
           state-repository: ${{ github.repository }}
           release-tag: ${{ env.STATE_TEST_TAG }}
           state-path: ${{ env.STATE_TEST_PATH }}
+
+      - name: Generate disposable age key material
+        if: success()
+        run: |
+          node --input-type=module -e 'import { appendFileSync } from "node:fs"; import { generateIdentity, identityToRecipient } from "age-encryption"; const identity = await generateIdentity(); const recipient = await identityToRecipient(identity); appendFileSync(process.env.GITHUB_ENV, `STATE_TEST_AGE_IDENTITY=${identity}\nSTATE_TEST_AGE_RECIPIENT=${recipient}\n`);'
+
+      - name: Save encrypted disposable state
+        if: success()
+        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":4,"lineage":"encrypted-integration"}' > "$STATE_TEST_PATH"
+
+      - name: Persist encrypted disposable state
+        if: success()
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          bootstrap: "true"
+          expected-remote-state-marker: absent
+          encryption: age
+          age-recipients: ${{ env.STATE_TEST_AGE_RECIPIENT }}
+
+      - name: Verify encrypted asset is not plaintext
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate") | .id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/state.age"
+          ! grep -F 'encrypted-integration' "$RUNNER_TEMP/state.age"
+
+      - name: Restore encrypted disposable state
+        if: success()
+        run: rm -f "$STATE_TEST_PATH"
+
+      - name: Decrypt encrypted disposable state
+        if: success()
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          encryption: age
+          age-identities: ${{ env.STATE_TEST_AGE_IDENTITY }}
+
+      - name: Verify decrypted disposable state
+        if: success()
+        run: grep -F 'encrypted-integration' "$STATE_TEST_PATH"
 
       - name: Cleanup disposable release with native reset
         if: always()

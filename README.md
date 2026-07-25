@@ -6,7 +6,6 @@ Store, restore, verify, and back up Terraform state using GitHub Release assets.
 > This project is maintained primarily for the organization's own use and
 > shared as-is. It has no public support, roadmap, or response-time
 > commitments. Forks are welcome for different workflows or priorities.
-
 > **This is not a native Terraform backend.** The action provides Terraform
 > state storage through GitHub Release assets. The consumer workflow remains
 > responsible for concurrency locking, Terraform execution, credentials, and
@@ -14,9 +13,8 @@ Store, restore, verify, and back up Terraform state using GitHub Release assets.
 
 ## Status
 
-This repository is a preview action. The initial milestone supports plain state
-assets. Encryption is intentionally deferred until a separate API and recovery
-design is reviewed.
+This repository is a preview action. It supports plain state assets by default
+and opt-in `age` encryption for new, dedicated state storage.
 
 ## Usage
 
@@ -73,6 +71,11 @@ Missing state fails closed by default.
 - `backup-retention`: defaults to `20`, maximum `1000`;
 - `source-commit` and `workflow-run-id`: optional recovery metadata.
 - `confirmation`: must be exactly `RESET` when `operation: reset`.
+- `encryption`: `none` (default) or `age`;
+- `age-recipients`: newline-delimited `age1...` public recipients, required to
+  save with `encryption: age`;
+- `age-identities`: secret newline-delimited `AGE-SECRET-KEY-1...` identities,
+  required to restore with `encryption: age`.
 
 ## Outputs
 
@@ -129,13 +132,53 @@ also fails.
 The action can persist a state file after a failed Terraform step. The consumer
 must call save with `if: always()` and preserve the restore marker.
 
+## Encryption
+
+`encryption: age` stores binary age ciphertext in the configured state asset
+and a versioned `<state-asset>.metadata.json` record. The current asset and its
+backups remain ciphertext; Terraform receives plaintext only at the configured
+local `state-path`. The action never writes identities to disk or emits them in
+outputs.
+
+Use a fresh Release tag for the encrypted preview. Existing plain storage is
+not migrated automatically, and an encrypted asset with missing or incompatible
+metadata fails closed. Encrypt to one or more native X25519 recipients; provide
+the corresponding identities only as GitHub Actions secrets.
+
+```yaml
+- name: Save encrypted Terraform state
+  if: always()
+  uses: ter-sh/terraform-release-state@<commit-sha>
+  with:
+    operation: save
+    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
+    state-path: terraform.tfstate
+    expected-remote-state-marker: ${{ steps.state-restore.outputs.remote-state-marker }}
+    encryption: age
+    age-recipients: ${{ vars.TF_STATE_AGE_RECIPIENTS }}
+
+- name: Restore encrypted Terraform state
+  id: state-restore
+  uses: ter-sh/terraform-release-state@<commit-sha>
+  with:
+    operation: restore
+    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
+    state-path: terraform.tfstate
+    encryption: age
+    age-identities: ${{ secrets.TF_STATE_AGE_IDENTITIES }}
+```
+
+For key rotation, save once with old and new recipients, verify restore with the
+new identity, then save with only the new recipient. Keep the old identity until
+all retained backups are no longer needed.
+
 For reset recovery steps and partial deletion handling, see
 [docs/recovery.md](docs/recovery.md).
 
 ## Security
 
 - State content and credentials are never logged or returned as outputs.
-- Paths are restricted to `GITHUB_WORKSPACE`.
+- Paths are restricted to real, non-symlink directories inside `GITHUB_WORKSPACE`.
 - The action does not create plaintext recovery files.
 - Use a short-lived GitHub App installation token where possible.
 - For cross-repository storage, the token needs access to the state repository.
@@ -146,7 +189,8 @@ For reset recovery steps and partial deletion handling, see
 ## Limitations
 
 - The action does not run Terraform or provide state locking by itself.
-- The first milestone stores plain assets only; age encryption is not included.
+- Encryption supports native X25519 age recipients only; passphrases, SSH keys,
+  plugins, and automatic plain/encrypted migrations are unsupported.
 - Release assets are not an atomic or native Terraform backend.
 - Backup cleanup failure is reported after the current state has been verified.
 - Backup metadata uses the `.metadata.json` format.
@@ -188,5 +232,9 @@ Release and removes it in an `always()` cleanup step; it never uses the
 
 Design records are available in [discovery](docs/discovery.md),
 [architecture](docs/architecture.md), [API/state/encryption decisions](docs/decisions.md),
-and the [preview API review](docs/api-review.md). They describe preview behavior
-only; no production migration is included.
+the [encryption proposal](docs/encryption-proposal.md), and the
+[preview API review](docs/api-review.md). They describe preview behavior only;
+no production migration is included.
+
+The action's security assumptions and residual risks are documented in the
+[threat model](docs/threat-model.md).

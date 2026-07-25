@@ -8,8 +8,10 @@ import {
   validateReleaseComponent,
   // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
 } from "../src/validation.mts";
-// @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-import { validateResetConfirmation } from "../src/reset-core.mts";
+const { validateResetConfirmation } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/reset-core.mjs"
+);
 
 test("validates action inputs", async (t) => {
   await t.test("parses booleans and retention", () => {
@@ -49,7 +51,13 @@ test("validates action inputs", async (t) => {
 
   await t.test("requires explicit reset confirmation", () => {
     assert.doesNotThrow(() => validateResetConfirmation("RESET"));
-    assert.throws(() => validateResetConfirmation("reset"), /confirmation=RESET/);
-    assert.throws(() => validateResetConfirmation(""), /no state resources were changed/);
+    assert.throws(
+      () => validateResetConfirmation("reset"),
+      /confirmation=RESET/,
+    );
+    assert.throws(
+      () => validateResetConfirmation(""),
+      /no state resources were changed/,
+    );
   });
 });
