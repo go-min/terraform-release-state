@@ -21,6 +21,8 @@ failures, or concurrent writers.
 - Delete 404s are idempotent; create/upload ambiguity is reconciled by inspecting
   the remote resource rather than retrying a non-idempotent POST blindly.
 - State, credentials, and keys are never logged or returned through outputs.
+- Encrypted state uses age ciphertext plus versioned current metadata; missing
+  or incompatible metadata fails closed instead of falling back to plaintext.
 
 ## Residual risks
 
@@ -28,7 +30,7 @@ failures, or concurrent writers.
   recovery source if replacement or recovery fails.
 - The action cannot provide workflow-level locking; consumers must configure a
   shared concurrency group with `cancel-in-progress: false`.
-- Plain state assets can contain secrets. Encryption remains deferred pending a
-  separate key delivery, rotation, and recovery design.
+- Plain state assets can contain secrets. Encrypted state still requires secure
+  recipient/identity rotation and protection of GitHub Actions secrets.
 - Filesystem checks reduce symlink traversal but cannot replace an isolated,
   trusted runner and reviewed workflow inputs.

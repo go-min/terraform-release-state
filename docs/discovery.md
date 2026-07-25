@@ -38,7 +38,8 @@ The current format is deliberately small and versionless during preview:
 - backups: `terraform.tfstate.backup-*`;
 - backup metadata: `<backup-name>.metadata.json`;
 - no legacy `.metadata.txt` support;
-- no encryption envelope in the current milestone.
+- opt-in age ciphertext with versioned current `.metadata.json`; no automatic
+  migration from existing plain storage.
 
 The marker is operational metadata, not persisted state format. It contains the
 current asset identity, digest, size, and update timestamp, encoded as an opaque

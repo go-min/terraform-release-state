@@ -18,8 +18,10 @@ The API is suitable for continued preview validation. It is not frozen for
 - Cross-repository storage is supported through the configured repository and
   token.
 - Outputs are diagnostics and opaque consistency data only.
-- Plain state plus `.metadata.json` is the only supported preview format.
-- Encryption is not silently implied or partially implemented.
+- Plain state is the default preview format; opt-in age ciphertext has a
+  versioned current `.metadata.json` record and fails closed on mismatch.
+- Encryption is explicit and accepts only native X25519 age recipients and
+  secret identities.
 
 ## Error behavior
 
@@ -31,8 +33,6 @@ are present.
 
 ## Open items before v1
 
-- Decide whether encryption is a separate action capability or a new versioned
-  state format.
 - Run live integration coverage for upload failure and recovery behavior.
 - Review permissions and GitHub App token examples with the production
   consumer, without changing that consumer in this repository.

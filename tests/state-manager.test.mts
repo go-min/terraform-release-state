@@ -103,6 +103,7 @@ test("save restores the previous current state when upload verification fails", 
     sourceCommit: "",
     workflowRunId: "",
     resetConfirmation: "",
+    encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
 
   try {

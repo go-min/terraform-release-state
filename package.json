@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@actions/github": "9.1.1"
+    "@actions/github": "9.1.1",
+    "age-encryption": "0.3.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",

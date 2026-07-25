@@ -1,11 +1,9 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import {
-  isResetAsset,
-  resetWithClient,
-  resetAssets,
-  // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-} from "../src/reset-core.mts";
+const { isResetAsset, resetWithClient, resetAssets } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/reset-core.mjs"
+);
 
 const config = {
   operation: "reset",
@@ -34,6 +32,10 @@ const release = { id: 7 } as never;
 test("reset only recognizes current state and backup namespace", () => {
   assert.equal(isResetAsset("terraform.tfstate", "terraform.tfstate"), true);
   assert.equal(
+    isResetAsset("terraform.tfstate.metadata.json", "terraform.tfstate"),
+    true,
+  );
+  assert.equal(
     isResetAsset(
       "terraform.tfstate.backup-20260725T120000Z",
       "terraform.tfstate",
@@ -48,17 +50,19 @@ test("reset only recognizes current state and backup namespace", () => {
     resetAssets(
       [
         asset(1, "terraform.tfstate"),
-        asset(2, "terraform.tfstate.backup-a"),
-        asset(3, "unrelated.zip"),
+        asset(2, "terraform.tfstate.metadata.json"),
+        asset(3, "terraform.tfstate.backup-a"),
+        asset(4, "unrelated.zip"),
       ],
       "terraform.tfstate",
     ),
     {
       owned: [
         asset(1, "terraform.tfstate"),
-        asset(2, "terraform.tfstate.backup-a"),
+        asset(2, "terraform.tfstate.metadata.json"),
+        asset(3, "terraform.tfstate.backup-a"),
       ],
-      unexpected: [asset(3, "unrelated.zip")],
+      unexpected: [asset(4, "unrelated.zip")],
     },
   );
 });
@@ -76,13 +80,13 @@ test("reset deletes assets, release, and tag through the client", async () => {
         asset(2, "terraform.tfstate.backup-a"),
       ];
     },
-    deleteAsset: async (_target, id) => {
+    deleteAsset: async (_target: unknown, id: number) => {
       calls.push(`asset:${id}`);
     },
-    deleteRelease: async (_target, id) => {
+    deleteRelease: async (_target: unknown, id: number) => {
       calls.push(`release:${id}`);
     },
-    deleteTag: async (_target, tag) => {
+    deleteTag: async (_target: unknown, tag: string) => {
       calls.push(`tag:${tag}`);
     },
   });
@@ -106,7 +110,7 @@ test("reset refuses to delete the release when assets appear after its audit", a
         listed = true;
         return [asset(1, "terraform.tfstate")];
       },
-      deleteAsset: async (_target, id) => {
+      deleteAsset: async (_target: unknown, id: number) => {
         calls.push(`asset:${id}`);
       },
       deleteRelease: async () => {
@@ -173,7 +177,7 @@ test("partial deletion stops and can be retried safely", async () => {
         asset(1, "terraform.tfstate"),
         asset(2, "terraform.tfstate.backup-a"),
       ],
-      deleteAsset: async (_target, id) => {
+      deleteAsset: async (_target: unknown, id: number) => {
         calls.push(`asset:${id}`);
         if (id === 2) throw new Error("temporary delete failure");
       },

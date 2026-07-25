@@ -47,6 +47,18 @@ inputs:
     description: "Required exact confirmation RESET for the destructive reset operation."
     required: false
     default: ""
+  encryption:
+    description: "State encryption mode: none or age."
+    required: false
+    default: none
+  age-recipients:
+    description: Newline-delimited age1 recipients required to save with encryption=age.
+    required: false
+    default: ""
+  age-identities:
+    description: Secret newline-delimited AGE-SECRET-KEY-1 identities required to restore with encryption=age.
+    required: false
+    default: ""
 outputs:
   operation:
     description: Completed operation.

@@ -39,18 +39,20 @@ This is a naming hardening change, not a state-content migration.
 
 ## Encryption decision
 
-Encryption is deferred. The first preview milestone stores plain Release assets
-and documents that Terraform state can contain sensitive values. Adding age or
-another envelope would change the asset format, key delivery, rotation,
-recovery, temporary-file, and threat-model contracts. It requires a separate
-API/security review before implementation.
+The preview supports opt-in `encryption: age` with newline-delimited native
+X25519 recipients and identities. The action uses the interoperable age format
+in its Node runtime; it does not require or invoke an `age` CLI. The current
+asset stores ciphertext and has a versioned `<state-asset>.metadata.json`
+record; backups remain ciphertext with `.metadata.json` recovery metadata.
 
-Until then:
+Passphrases, SSH recipients, plugins, post-quantum recipients, and automatic
+plain/encrypted migration are deliberately unsupported. Existing plain storage
+continues to work with `encryption: none`; encrypted storage with missing or
+incompatible metadata fails closed.
 
-- never log state or credentials;
-- prefer short-lived GitHub App installation tokens;
-- restrict Release access and repository permissions;
-- do not expose plaintext or encryption keys through outputs.
+Identities are secret inputs, masked before use, never written by the action,
+never logged, and never returned through outputs. Rotation uses overlapping
+recipient sets and must retain old identities for the backup retention window.
 
 ## Compatibility decision
 

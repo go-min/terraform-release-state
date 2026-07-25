@@ -12,6 +12,11 @@ reset. Reset also deletes the configured Release tag.
 The action does not provide locking. Consumer workflows must use a shared
 concurrency group with `cancel-in-progress: false`.
 
+For `encryption: age`, store `age-identities` only in GitHub Actions secrets or
+an external secret manager. The action masks the input and never writes or
+returns identities. Do not use passphrases, repository variables, artifacts, or
+command-line arguments for private key material.
+
 The repository pins direct package versions and GitHub Actions to immutable
 commit SHAs. Pull requests receive dependency review, and the repository runs
 CodeQL analysis on push, pull request, and a weekly schedule. Dependabot keeps

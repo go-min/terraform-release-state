@@ -7,6 +7,7 @@ import {
   resolveStatePath,
   validateReleaseComponent,
 } from "./validation.mjs";
+import { readEncryptionConfig } from "./encryption.mjs";
 import type { ActionConfig } from "./types.mjs";
 
 export function readConfig(): ActionConfig {
@@ -33,6 +34,16 @@ export function readConfig(): ActionConfig {
   validateReleaseComponent(assetName, "state-asset");
 
   const workspace = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
+  const ageIdentities = core.getInput("age-identities");
+  if (ageIdentities) core.setSecret(ageIdentities);
+  const encryption = readEncryptionConfig(
+    core.getInput("encryption").toLowerCase(),
+    core.getInput("age-recipients"),
+    ageIdentities,
+  );
+  if (operation === "reset" && encryption.mode !== "none") {
+    fail("reset does not accept encryption inputs.");
+  }
   const statePathInput = core.getInput("state-path");
   if (operation !== "reset" && !statePathInput) {
     fail("state-path is required for restore and save.");
@@ -51,5 +62,6 @@ export function readConfig(): ActionConfig {
     sourceCommit: core.getInput("source-commit"),
     workflowRunId: core.getInput("workflow-run-id"),
     resetConfirmation: core.getInput("confirmation"),
+    encryption,
   };
 }
