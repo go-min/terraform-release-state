@@ -60,7 +60,7 @@ inputs:
     required: false
     default: ""
   pr-branch:
-    description: Branch for the StateImport pull request; derived by default.
+    description: Branch for the StateImport pull request; defaults to terraform-release-state/<imports-filename>.
     required: false
     default: ""
   pr-title:

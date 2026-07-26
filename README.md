@@ -82,7 +82,7 @@ to reject stale saves and should be operationally serialized where possible.
 validates it like `restore`, proposes import blocks for managed instances with
 a string or numeric `attributes.id`, and prints a diff without modifying the
 workspace. It skips data resources and instances without a usable ID. The
-The output file path is configurable:
+output file path is configurable:
 
 ```yaml
 - name: Propose Terraform imports
@@ -93,11 +93,24 @@ The output file path is configurable:
     imports-path: infrastructure/generated-imports.tf
 ```
 
-StateImport is not a provider-aware import planner. Review provider-specific
-IDs and the corresponding resource configuration before applying. In its
-default mode it only prints a diff: it does not write files, create commits, or
-open pull requests. Terraform is never run, and state is never returned through
-outputs or written to the workspace.
+StateImport applies a small, explicit set of provider-specific ID
+normalizations:
+
+| Resource                                 | Generated import ID         | Required state attributes |
+| ---------------------------------------- | --------------------------- | ------------------------- |
+| `github_repository_ruleset`              | `<repository>:<ruleset_id>` | `repository`, `id`        |
+| `github_repository_vulnerability_alerts` | `<repository>`              | `repository`              |
+| Other resources                          | `attributes.id` unchanged   | `id`                      |
+
+If a provider-specific resource does not contain the required `repository`
+attribute, StateImport skips it and reports the reason. It does not infer
+repository names from numeric IDs or other state fields. This mapping is not a
+general provider-aware import planner: review provider-specific IDs and the
+corresponding resource configuration before applying.
+
+In its default mode StateImport only prints a diff: it does not write files,
+create commits, or open pull requests. Terraform is never run, and state is
+never returned through outputs or written to the workspace.
 
 To opt in to PR creation, set `create-pr: "true"`:
 
@@ -112,9 +125,10 @@ with:
   imports-path: infrastructure/generated-imports.tf
 ```
 
-`pr-base` defaults to `GITHUB_REF_NAME`; `pr-branch` is derived from the
-imports filename. Set them explicitly only when the workflow ref is not the
-intended writable base branch.
+`pr-base` defaults to `GITHUB_REF_NAME`; `pr-branch` defaults to
+`terraform-release-state/<imports-filename>`. Set them explicitly only when the
+workflow ref is not the intended writable base branch or the default branch
+name does not fit the consumer repository's conventions.
 
 The action compares the generated file with the remote base branch. If it is
 different, it creates or reuses the named branch, commits only the imports file,
