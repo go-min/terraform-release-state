@@ -12,6 +12,8 @@ type TerraformState = {
   resources?: unknown;
 };
 
+type ResourceAttributes = Record<string, unknown>;
+
 function quote(value: string): string {
   return JSON.stringify(value);
 }
@@ -33,6 +35,41 @@ function resourceAddress(resource: Record<string, unknown>): string {
   if (typeof type !== "string" || typeof name !== "string") return "";
   const module = typeof resource.module === "string" ? resource.module : "";
   return `${module ? `${module}.` : ""}${type}.${name}`;
+}
+
+function normalizeImportId(
+  resourceType: unknown,
+  attributes: ResourceAttributes,
+  id: string,
+): { id?: string; reason?: string } {
+  const repository =
+    typeof attributes.repository === "string"
+      ? attributes.repository.trim()
+      : "";
+
+  if (resourceType === "github_repository_ruleset") {
+    if (!repository) {
+      return {
+        reason:
+          "missing non-empty attributes.repository required for github_repository_ruleset import ID",
+      };
+    }
+    return {
+      id: id.startsWith(`${repository}:`) ? id : `${repository}:${id}`,
+    };
+  }
+
+  if (resourceType === "github_repository_vulnerability_alerts") {
+    if (!repository) {
+      return {
+        reason:
+          "missing non-empty attributes.repository required for github_repository_vulnerability_alerts import ID",
+      };
+    }
+    return { id: repository };
+  }
+
+  return { id };
 }
 
 export function candidatesFromState(state: TerraformState): {
@@ -79,11 +116,11 @@ export function candidatesFromState(state: TerraformState): {
       }
       const instance = instanceValue as Record<string, unknown>;
       const address = `${baseAddress}${instanceSuffix(instance.index_key)}`;
-      const attributes = instance.attributes;
-      const id =
-        attributes && typeof attributes === "object"
-          ? (attributes as Record<string, unknown>).id
-          : undefined;
+      const attributes =
+        instance.attributes && typeof instance.attributes === "object"
+          ? (instance.attributes as ResourceAttributes)
+          : {};
+      const id = attributes.id;
       if (typeof id !== "string" && typeof id !== "number") {
         skipped.push({
           address,
@@ -95,7 +132,19 @@ export function candidatesFromState(state: TerraformState): {
         skipped.push({ address, reason: "empty attributes.id" });
         continue;
       }
-      candidates.push({ address, id: String(id) });
+      const normalized = normalizeImportId(
+        resource.type,
+        attributes,
+        String(id),
+      );
+      if (!normalized.id) {
+        skipped.push({
+          address,
+          reason: normalized.reason || "invalid import ID",
+        });
+        continue;
+      }
+      candidates.push({ address, id: normalized.id });
     }
   }
   const byAddress = new Map<string, ImportCandidate | null>();

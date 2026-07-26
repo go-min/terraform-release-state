@@ -56,7 +56,7 @@ test("validates action inputs", async (t) => {
 
   await t.test("validates pull request branch refs", () => {
     assert.doesNotThrow(() =>
-      validateGitRef("stateimport/generated", "branch"),
+      validateGitRef("terraform-release-state/generated", "branch"),
     );
     assert.throws(() => validateGitRef("../main", "branch"), /unsupported/);
     assert.throws(() => validateGitRef("main:broken", "branch"), /unsupported/);

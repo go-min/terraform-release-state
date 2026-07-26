@@ -83,6 +83,136 @@ test("StateImport skips data resources and instances without IDs", () => {
   ]);
 });
 
+test("StateImport normalizes GitHub provider-specific import IDs", () => {
+  const result = candidatesFromState({
+    resources: [
+      {
+        mode: "managed",
+        type: "github_repository_ruleset",
+        name: "default",
+        instances: [
+          {
+            attributes: {
+              id: 12345,
+              repository: "terraform-release-state",
+              enforcement: "active",
+            },
+          },
+        ],
+      },
+      {
+        mode: "managed",
+        type: "github_repository_vulnerability_alerts",
+        name: "default",
+        instances: [
+          {
+            attributes: {
+              id: 67890,
+              repository: "terraform-release-state",
+              enabled: true,
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(result.candidates, [
+    {
+      address: "github_repository_ruleset.default",
+      id: "terraform-release-state:12345",
+    },
+    {
+      address: "github_repository_vulnerability_alerts.default",
+      id: "terraform-release-state",
+    },
+  ]);
+  assert.deepEqual(result.skipped, []);
+  const output = renderImports(result.candidates);
+  assert.doesNotMatch(output, /enforcement|enabled/);
+});
+
+test("StateImport preserves generic and already-normalized IDs", () => {
+  const result = candidatesFromState({
+    resources: [
+      {
+        mode: "managed",
+        type: "github_repository",
+        name: "main",
+        instances: [{ attributes: { id: "terraform-release-state" } }],
+      },
+      {
+        mode: "managed",
+        type: "github_branch",
+        name: "main",
+        instances: [{ attributes: { id: "terraform-release-state:main" } }],
+      },
+      {
+        mode: "managed",
+        type: "github_repository_ruleset",
+        name: "existing",
+        instances: [
+          {
+            attributes: {
+              id: "terraform-release-state:12345",
+              repository: "terraform-release-state",
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(result.candidates, [
+    {
+      address: "github_branch.main",
+      id: "terraform-release-state:main",
+    },
+    {
+      address: "github_repository_ruleset.existing",
+      id: "terraform-release-state:12345",
+    },
+    {
+      address: "github_repository.main",
+      id: "terraform-release-state",
+    },
+  ]);
+  assert.deepEqual(result.skipped, []);
+});
+
+test("StateImport skips provider-specific resources without repository", () => {
+  const result = candidatesFromState({
+    resources: [
+      {
+        mode: "managed",
+        type: "github_repository_ruleset",
+        name: "missing_repository",
+        instances: [{ attributes: { id: 12345 } }],
+      },
+      {
+        mode: "managed",
+        type: "github_repository_vulnerability_alerts",
+        name: "missing_repository",
+        instances: [{ attributes: { id: 67890, enabled: true } }],
+      },
+    ],
+  });
+
+  assert.deepEqual(result.candidates, []);
+  assert.deepEqual(result.skipped, [
+    {
+      address: "github_repository_ruleset.missing_repository",
+      reason:
+        "missing non-empty attributes.repository required for github_repository_ruleset import ID",
+    },
+    {
+      address: "github_repository_vulnerability_alerts.missing_repository",
+      reason:
+        "missing non-empty attributes.repository required for github_repository_vulnerability_alerts import ID",
+    },
+  ]);
+});
+
 test("StateImport renders stable HCL without exposing other state attributes", () => {
   const output = renderImports([{ address: "aws_instance.web", id: "i-web" }]);
 
@@ -146,7 +276,7 @@ test("StateImport reads the Release asset and does not create a local state file
     importsPath,
     createPr: false,
     prBase: "main",
-    prBranch: "stateimport/imports.tf",
+    prBranch: "terraform-release-state/imports.tf",
     prTitle: "chore(terraform): update generated imports",
     encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
@@ -257,7 +387,7 @@ test("StateImport creates one pull request from the remote base diff", async () 
     importsPath: join(workspace, "imports.tf"),
     createPr: true,
     prBase: "main",
-    prBranch: "stateimport/imports.tf",
+    prBranch: "terraform-release-state/imports.tf",
     prTitle: "chore(terraform): update generated imports",
     encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
@@ -267,12 +397,12 @@ test("StateImport creates one pull request from the remote base diff", async () 
     const update = calls.find((call) => call.method === "updateFile");
     const createPull = calls.find((call) => call.method === "createPull");
     assert.ok(update);
-    assert.equal(update.options.branch, "stateimport/imports.tf");
+    assert.equal(update.options.branch, "terraform-release-state/imports.tf");
     assert.equal(update.options.path, "imports.tf");
     assert.equal(update.options.sha, undefined);
     assert.ok(createPull);
     assert.equal(createPull.options.base, "main");
-    assert.equal(createPull.options.head, "stateimport/imports.tf");
+    assert.equal(createPull.options.head, "terraform-release-state/imports.tf");
     assert.equal(createPull.options.repo, "consumer");
     assert.match(String(createPull.options.title), /generated imports/);
     assert.match(String(createPull.options.body), /Terraform import proposal/);

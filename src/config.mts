@@ -64,7 +64,7 @@ export function readConfig(): ActionConfig {
   const prBase = core.getInput("pr-base") || process.env.GITHUB_REF_NAME || "";
   const prBranch =
     core.getInput("pr-branch") ||
-    `stateimport/${basename(importsPath).replace(/[^A-Za-z0-9._-]/g, "-")}`;
+    `terraform-release-state/${basename(importsPath).replace(/[^A-Za-z0-9._-]/g, "-")}`;
   const prTitle =
     core.getInput("pr-title") || "chore(terraform): update generated imports";
   if (operation === "import" && createPr) {
