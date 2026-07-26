@@ -13,6 +13,10 @@ function commandValue(value: string): string {
 }
 
 export const core = {
+  info(message: string): void {
+    process.stdout.write(`${message}\n`);
+  },
+
   getInput(name: string, options: { required?: boolean } = {}): string {
     const key = `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
     const shellSafeKey = key.replaceAll("-", "_");

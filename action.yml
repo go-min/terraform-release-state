@@ -3,7 +3,7 @@ description: Store, restore, verify, encrypt, and back up Terraform state with G
 author: ter-sh
 inputs:
   operation:
-    description: "State operation: restore, save, or reset."
+    description: "State operation: restore, save, reset, or import."
     required: true
   github-token:
     description: Token with the required Contents access to the state repository.
@@ -21,7 +21,7 @@ inputs:
     required: false
     default: terraform.tfstate
   state-path:
-    description: Workspace-relative path for the local state file.
+    description: Workspace-relative path for the local state file; required for restore and save.
     required: false
   bootstrap:
     description: Explicitly allow creation of missing state storage.
@@ -47,6 +47,14 @@ inputs:
     description: "Required exact confirmation RESET for the destructive reset operation."
     required: false
     default: ""
+  imports-path:
+    description: Workspace-relative directory for the proposed imports file in StateImport.
+    required: false
+    default: "."
+  imports-file:
+    description: Filename for the proposed Terraform imports file in StateImport.
+    required: false
+    default: imports.tf
   encryption:
     description: "State encryption mode: none or age."
     required: false

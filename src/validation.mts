@@ -48,6 +48,32 @@ export function resolveStatePath(value: string, workspace: string): string {
   return absolute;
 }
 
+export function resolveImportsPath(
+  directory: string,
+  file: string,
+  workspace: string,
+): { path: string; file: string } {
+  if (!directory || directory.includes("\0")) {
+    throw new Error("imports-path must be a non-empty path.");
+  }
+  if (
+    !file ||
+    file.includes("\0") ||
+    file === "." ||
+    file === ".." ||
+    file.includes("/") ||
+    file.includes("\\")
+  ) {
+    throw new Error("imports-file must be a filename without path separators.");
+  }
+  const workspacePath = resolve(workspace);
+  const output = resolve(workspacePath, directory, file);
+  if (!isPathInside(workspacePath, output)) {
+    throw new Error("imports-path must remain inside GITHUB_WORKSPACE.");
+  }
+  return { path: output, file };
+}
+
 export function validateReleaseComponent(value: string, name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value))
     throw new Error(`${name} contains unsupported characters.`);

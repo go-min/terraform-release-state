@@ -89,6 +89,32 @@ async function loadCurrentMetadata(
   return { asset, data };
 }
 
+export async function readStoredState(
+  context: StateManagerContext,
+): Promise<Buffer> {
+  const { octokit, config } = context;
+  const release = await getRelease(octokit, config.target, config.tag);
+  if (!release) {
+    fail(`State release ${config.tag} does not exist.`);
+  }
+  const assets = await listAssets(octokit, config.target, release.id);
+  const asset = findAsset(assets, config.assetName);
+  const metadata = findAsset(assets, metadataName(config.assetName));
+  if (!asset) {
+    if (metadata) {
+      fail(
+        `State asset ${config.assetName} is missing but its metadata asset still exists.`,
+      );
+    }
+    fail(
+      `State asset ${config.assetName} is missing from release ${config.tag}.`,
+    );
+  }
+  const ciphertext = await downloadAsset(octokit, config.target, asset);
+  await loadCurrentMetadata(context, assets, ciphertext);
+  return decryptState(config.encryption, ciphertext);
+}
+
 export async function restore(context: StateManagerContext): Promise<void> {
   const { octokit, config } = context;
   const release = await ensureRelease(context);

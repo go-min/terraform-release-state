@@ -15,11 +15,13 @@ describe("action metadata", () => {
     assert.match(metadata, /expected-remote-state-marker:/);
     assert.match(metadata, /backup-retention:/);
     assert.match(metadata, /remote-state-marker:/);
-    assert.match(metadata, /State operation: restore, save, or reset/);
+    assert.match(metadata, /State operation: restore, save, reset, or import/);
     assert.match(metadata, /confirmation:/);
     assert.match(metadata, /encryption:/);
     assert.match(metadata, /age-recipients:/);
     assert.match(metadata, /age-identities:/);
+    assert.match(metadata, /imports-path:/);
+    assert.match(metadata, /imports-file:/);
     assert.match(metadata, /state-path:[\s\S]*required: false/);
   });
 });

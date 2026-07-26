@@ -30,7 +30,7 @@ export type EncryptionConfig = {
 };
 
 export type ActionConfig = {
-  operation: "restore" | "save" | "reset";
+  operation: "restore" | "save" | "reset" | "import";
   token: string;
   target: RepositoryTarget;
   tag: string;
@@ -43,6 +43,8 @@ export type ActionConfig = {
   sourceCommit: string;
   workflowRunId: string;
   resetConfirmation: string;
+  importsPath: string;
+  importsFile: string;
   encryption: EncryptionConfig;
 };
 

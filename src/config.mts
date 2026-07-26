@@ -1,28 +1,30 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { core, fail } from "./action-core.mjs";
 import {
   parseBoolean,
   parseRepository,
   parseRetention,
   resolveStatePath,
+  resolveImportsPath,
   validateReleaseComponent,
 } from "./validation.mjs";
 import { readEncryptionConfig } from "./encryption.mjs";
 import type { ActionConfig } from "./types.mjs";
 
 export function readConfig(): ActionConfig {
-  const token = core.getInput("github-token", { required: true });
-  core.setSecret(token);
-
   const operation = core
     .getInput("operation", { required: true })
     .toLowerCase();
+  const token = core.getInput("github-token", { required: true });
+  core.setSecret(token);
+
   if (
     operation !== "restore" &&
     operation !== "save" &&
-    operation !== "reset"
+    operation !== "reset" &&
+    operation !== "import"
   ) {
-    fail("operation must be restore, save, or reset.");
+    fail("operation must be restore, save, reset, or import.");
   }
 
   const target = parseRepository(
@@ -45,9 +47,12 @@ export function readConfig(): ActionConfig {
     fail("reset does not accept encryption inputs.");
   }
   const statePathInput = core.getInput("state-path");
-  if (operation !== "reset" && !statePathInput) {
+  if (operation !== "reset" && operation !== "import" && !statePathInput) {
     fail("state-path is required for restore and save.");
   }
+  const importsPath = core.getInput("imports-path") || ".";
+  const importsFile = core.getInput("imports-file") || "imports.tf";
+  const importsOutput = resolveImportsPath(importsPath, importsFile, workspace);
   return {
     operation,
     token,
@@ -62,6 +67,8 @@ export function readConfig(): ActionConfig {
     sourceCommit: core.getInput("source-commit"),
     workflowRunId: core.getInput("workflow-run-id"),
     resetConfirmation: core.getInput("confirmation"),
+    importsPath: dirname(importsOutput.path),
+    importsFile: importsOutput.file,
     encryption,
   };
 }

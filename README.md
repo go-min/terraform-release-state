@@ -23,6 +23,7 @@ assets.
 - recovery after a partially failed state replacement;
 - optional `age` encryption with native X25519 recipients;
 - same-repository and cross-repository state storage;
+- a read-only `StateImport` proof of concept for proposing Terraform imports;
 - no Terraform state, token, or private key outputs.
 
 GitHub Releases provide a repository-scoped asset store with permissions,
@@ -76,6 +77,29 @@ Every workflow in the consumer repository that writes this asset must use the
 same concurrency group. Concurrency groups do not coordinate across different
 repositories; cross-repository writers rely on the action's consistency check
 to reject stale saves and should be operationally serialized where possible.
+
+### StateImport proof of concept
+
+`operation: import` downloads the current state asset from GitHub Release,
+validates it like `restore`, proposes import blocks for managed instances with
+a string or numeric `attributes.id`, and prints a diff without modifying the
+workspace. It skips data resources and instances without a usable ID. The
+output location and filename are separate inputs:
+
+```yaml
+- name: Propose Terraform imports
+  uses: ter-sh/terraform-release-state@<commit-sha>
+  with:
+    operation: import
+    github-token: ${{ github.token }}
+    imports-path: infrastructure
+    imports-file: generated-imports.tf
+```
+
+This is a POC, not a provider-aware import planner. Review provider-specific
+IDs and the corresponding resource configuration before applying. It does not
+write files, run Terraform, create commits, or open pull requests. The state is
+never returned through outputs and is not written to the workspace.
 
 ## Lifecycle
 
@@ -163,7 +187,7 @@ Minimum token permissions:
 
 | Input                          | Default             | Description                                                         |
 | ------------------------------ | ------------------- | ------------------------------------------------------------------- |
-| `operation`                    | required            | `restore`, `save`, or `reset`                                       |
+| `operation`                    | required            | `restore`, `save`, `reset`, or `import`                             |
 | `github-token`                 | required            | Token with access to the state repository                           |
 | `state-repository`             | current repository  | Repository in `owner/name` format                                   |
 | `release-tag`                  | `terraform-state`   | Dedicated state Release tag                                         |
@@ -178,6 +202,8 @@ Minimum token permissions:
 | `encryption`                   | `none`              | `none` or `age`                                                     |
 | `age-recipients`               | empty               | Newline-delimited public recipients required for encrypted save     |
 | `age-identities`               | empty               | Secret newline-delimited identities required for encrypted restore  |
+| `imports-path`                 | `.`                 | Workspace-relative directory for the StateImport output             |
+| `imports-file`                 | `imports.tf`        | Filename for the StateImport output                                 |
 
 ## Outputs
 
