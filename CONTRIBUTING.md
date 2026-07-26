@@ -32,4 +32,13 @@ changes affect runtime behavior.
 - Document public API, state format, encryption, and recovery changes.
 
 Release, publication, and production integration changes require explicit
-maintainer approval.
+maintainer approval. Use Conventional Commit prefixes (`feat:`, `fix:`,
+`docs:`, `chore:`, `refactor:`, `test:`, `ci:`, or `build:`). After changes
+reach `main`, release-please creates or updates a Release PR with the version,
+`package.json`, and `CHANGELOG.md` changes. Merge that PR only after its normal
+checks pass; release-please then creates the GitHub Release and tag.
+
+Release automation uses the `release-please` GitHub Environment and a
+short-lived GitHub App installation token configured through its
+`RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret. Do not
+publish a release by manually creating or moving tags.

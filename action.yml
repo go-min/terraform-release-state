@@ -56,15 +56,15 @@ inputs:
     required: false
     default: "false"
   pr-base:
-    description: Base branch for the StateImport pull request; defaults to GITHUB_REF_NAME.
+    description: Base branch for the Terraform import proposal pull request; defaults to GITHUB_REF_NAME.
     required: false
     default: ""
   pr-branch:
-    description: Branch for the StateImport pull request; defaults to terraform-release-state/<imports-filename>.
+    description: Branch for the Terraform import proposal pull request; defaults to terraform-release-state/<imports-filename>.
     required: false
     default: ""
   pr-title:
-    description: Pull request title for StateImport.
+    description: Pull request title for the Terraform import proposal.
     required: false
     default: "chore(terraform): update generated imports"
   encryption:
@@ -103,7 +103,7 @@ outputs:
   reset-release-found:
     description: Whether reset found the target state release.
   import-pr-url:
-    description: Pull request URL created or reused by StateImport, when enabled.
+    description: Pull request URL created or reused for the Terraform import proposal, when enabled.
 runs:
   using: node24
   main: dist/index.js

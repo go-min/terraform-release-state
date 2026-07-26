@@ -1,0 +1,7 @@
+{
+  "release-type": "node",
+  "package-name": "terraform-release-state",
+  "changelog-path": "CHANGELOG.md",
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": false
+}

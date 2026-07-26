@@ -244,19 +244,19 @@ export async function generateImports(
     pullRequestUrl = result.url;
   }
   core.info(
-    `StateImport: ${candidates.length} import candidate(s), ${skipped.length} skipped; output ${relativePath}`,
+    `Import proposals: ${candidates.length} candidate(s), ${skipped.length} skipped; output ${relativePath}`,
   );
   for (const item of skipped) {
-    core.info(`StateImport: skipped ${item.address} (${item.reason}).`);
+    core.info(`Import proposals: skipped ${item.address} (${item.reason}).`);
   }
   if (current === generated) {
-    core.info("StateImport: imports file is unchanged; no diff.");
+    core.info("Import proposals: imports file is unchanged; no diff.");
     return;
   }
   core.info(
     config.createPr
-      ? "StateImport: proposed diff (workspace file was not modified; PR branch may be updated):"
-      : "StateImport: proposed diff (file was not modified):",
+      ? "Import proposals: proposed diff (workspace file was not modified; PR branch may be updated):"
+      : "Import proposals: proposed diff (file was not modified):",
   );
   core.info(diffLines(current, generated, relativePath));
   if (pullRequestUrl) core.setOutput("import-pr-url", pullRequestUrl);
