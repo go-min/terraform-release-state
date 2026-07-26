@@ -252,9 +252,9 @@ variables and secrets as follows:
 - variable `RELEASE_APP_CLIENT_ID` — GitHub App client ID;
 - secret `RELEASE_APP_PRIVATE_KEY` — GitHub App private key.
 
-The App must be installed on this repository with Contents, Issues, and Pull
-requests write access. A short-lived installation token is used so the Release
-PR receives normal CI checks. Classic PATs are not the recommended release
+The App must be installed on this repository with Contents and Pull requests
+write access. A short-lived installation token is used so the Release PR
+receives normal CI checks. Classic PATs are not the recommended release
 credential.
 
 See [Architecture](docs/architecture.md), [Recovery](docs/recovery.md), and
