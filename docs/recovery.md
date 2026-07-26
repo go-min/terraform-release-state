@@ -1,79 +1,68 @@
 # Recovery and reset
 
-Recovery is an operator decision. The action does not infer that missing or
-corrupt state is safe to recreate, import resources, or run Terraform.
+The action fails closed when state is missing, corrupt, inaccessible, or
+changed by another writer. Recovery is an operator decision; the action does
+not recreate infrastructure, infer imports, or run Terraform.
 
-## Failure guide
+## Failure responses
 
-| Failure                                | Safe response                                                               |
-| -------------------------------------- | --------------------------------------------------------------------------- |
-| Release or current asset is missing    | Investigate deletion/access; bootstrap only after explicit approval         |
-| Integrity or metadata validation fails | Stop Terraform; verify the latest complete backup pair and encryption key   |
-| Remote marker changed after restore    | Do not overwrite; rerun from restore after the competing writer is resolved |
-| Save reports successful recovery       | Remote state was restored; investigate the failed replacement before retry  |
-| Automatic recovery also fails          | Preserve local state and inspect current/backup assets before any mutation  |
-| Retention cleanup fails after save     | Treat the new current state as authoritative; restore again before retrying |
-| Reset partially fails                  | Retry reset with the same target; deletes are idempotent                    |
+| Failure                            | Response                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| Release or current asset missing   | Investigate access/deletion; bootstrap only after approval              |
+| Integrity or metadata failure      | Stop Terraform; inspect the latest complete backup and key              |
+| Remote marker changed              | Do not overwrite; restore again after resolving the competing writer    |
+| Save replacement and recovery fail | Preserve local state; inspect current and backup assets before mutation |
+| Retention fails after save         | Treat the new current state as authoritative; retry cleanup separately  |
+| Reset partially fails              | Retry reset with the same target; deletions are idempotent              |
 
-Never restore an older backup over a newer local state produced by a partially
-successful `terraform apply`. Persist the newer local state first when its
-lineage and remote marker are valid.
+Never restore an older backup over a newer local state from a partially
+successful `terraform apply`. Save the newer local state first when its marker
+and lineage are valid.
 
-## Reset contract
+## Reset
 
-Reset requires:
+Reset requires `operation: reset`, exact `confirmation: RESET`, and Contents
+write access to the configured state repository. Before deletion it audits all
+Release assets and refuses unexpected assets. It then deletes only the managed
+current asset, metadata, backups, Release, and tag. A missing resource is
+already-reset success.
 
-- `operation: reset`;
-- exact `confirmation: RESET`;
-- Contents write access to the configured state repository;
-- an operator-approved recovery or disposable test context.
-
-Before deletion, the action lists every Release asset and refuses a Release
-containing anything outside the configured state namespace. It then deletes
-state assets, rechecks the Release, deletes the Release, and deletes its tag.
-HTTP `404` is treated as already absent, so the operation is safe to retry after
-partial completion.
+Protect reset behind a reviewed workflow, protected environment, or equivalent
+approval boundary:
 
 ```yaml
 - name: Reset approved state storage
-  uses: ter-sh/terraform-release-state@<commit-sha>
+  uses: ter-sh/terraform-release-state@322dbb7a0bb51951222ddd86fe800531b1ef9a6b # v0.2.1
   with:
     operation: reset
     confirmation: RESET
     github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: ter-sh/state-repository
-    release-tag: terraform-state-recovery
+    state-repository: owner/state-repository
 ```
 
-Do not expose `confirmation` as an unreviewed workflow input. Use a protected
-environment or equivalent approval boundary for non-disposable state.
+## Clean bootstrap
 
-## Clean bootstrap after reset
-
-After reset, restore with explicit bootstrap. This creates the empty Release
-boundary and returns `remote-state-marker: absent`; it does not create
-infrastructure or state content.
+After an approved reset, restore with explicit bootstrap. This creates an empty
+Release boundary and returns the opaque `remote-state-marker: absent`; it does
+not create state content or infrastructure.
 
 ```yaml
 - name: Bootstrap clean state storage
-  id: state
-  uses: ter-sh/terraform-release-state@<commit-sha>
+  id: state-restore
+  uses: ter-sh/terraform-release-state@322dbb7a0bb51951222ddd86fe800531b1ef9a6b # v0.2.1
   with:
     operation: restore
     bootstrap: "true"
     github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: ter-sh/state-repository
-    release-tag: terraform-state-recovery
+    state-repository: owner/state-repository
     state-path: terraform.tfstate
 ```
 
-Run Terraform only after reviewing why the previous state was reset. Persist
-the resulting local state with `save` and
-`expected-remote-state-marker: ${{ steps.state.outputs.remote-state-marker }}`.
+Run Terraform only after reviewing why state was reset. Save the resulting
+state with the marker from `state-restore`.
 
 ## Encrypted recovery
 
-GitHub access cannot recover age-encrypted state without a matching identity.
-Retain every old identity until all backups encrypted for it have expired or
-been intentionally removed. Test a new identity before removing an old
-recipient from subsequent saves.
+GitHub access cannot decrypt age-encrypted state without a matching identity.
+Retain old identities until all backups encrypted for them have expired or
+been intentionally removed. Test a new identity before removing the old one.

@@ -1,63 +1,44 @@
 # Threat model
 
-## Protected assets
+## Security boundary
 
-- Terraform state and encrypted backups;
-- GitHub tokens and age identities;
-- recovery metadata and optimistic consistency markers;
-- the dedicated state Release and tag.
+Protected assets are Terraform state, backup metadata, age identities, GitHub
+tokens, consistency markers, and the managed Release namespace. The action
+trusts the reviewed workflow, runner, and explicitly granted token. It treats
+paths, API results after ambiguous failures, remote assets, and concurrent
+writers as untrusted.
 
-## Trust boundaries
+## Controls
 
-The action trusts the reviewed consumer workflow, GitHub Actions runtime, and
-the permissions intentionally granted to its token. It does not trust local
-path components, remote assets, caller-provided names, API results after
-ambiguous failures, or concurrent writers.
+| Threat                                   | Control                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| State or credential disclosure           | No state/key outputs; masked secrets; escaped workflow commands        |
+| Path traversal or symlink escape         | Workspace containment, real-directory checks, regular files only       |
+| Corrupt or substituted state             | GitHub digest, SHA-256 verification, bound metadata                    |
+| Stale concurrent writer                  | Consumer concurrency plus restore/save marker checks                   |
+| Accidental empty-state recreation        | Explicit bootstrap; access errors remain failures                      |
+| Partial replacement or backup corruption | Paired backups, compensation, orphan cleanup, metadata-first retention |
+| Over-broad reset                         | Exact confirmation, namespace audit, post-delete verification          |
+| Ambiguous API mutation                   | Reconcile expected remote content before accepting success             |
+| Dependency compromise                    | Lockfile, pinned actions, dependency review, CodeQL, Dependabot        |
 
-## Threats and controls
+Age encryption uses native X25519 recipients. Identities remain masked and in
+memory; plaintext state is not written to outputs, logs, artifacts, or caches.
 
-| Threat                              | Control                                                                    |
-| ----------------------------------- | -------------------------------------------------------------------------- |
-| State or credential disclosure      | No state/key outputs; workflow commands escaped; secret inputs masked      |
-| Path traversal or symlink escape    | Workspace-relative validation, real-directory checks, regular files only   |
-| Corrupt or substituted asset        | GitHub digest, local SHA-256, upload download-verification, bound metadata |
-| Stale or concurrent writer          | Consumer concurrency plus opaque restore/save marker checks                |
-| Implicit empty-state recreation     | Explicit bootstrap; access and integrity errors remain failures            |
-| Partial replacement                 | Paired backup plus guarded recovery from the downloaded previous state     |
-| Backup pair corruption              | Paired metadata, compensation, orphan cleanup, metadata-first retention    |
-| Over-broad reset                    | Exact confirmation, namespace audit, post-delete audit                     |
-| Ambiguous non-idempotent API result | Remote reconciliation before accepting create/upload success               |
-| Dependency compromise               | Pinned packages/actions, lockfile, dependency review, CodeQL, Dependabot   |
-
-Encrypted state uses the interoperable age format with native X25519
-recipients. Identities are masked line-by-line and remain in memory; the action
-does not write them to files or outputs.
-
-`operation: import` is read-only by default. Its optional PR mode writes only
-the configured imports file to a dedicated branch and requires explicit
-`create-pr: "true"`. The generated file can contain provider resource IDs, so
-the target repository and pull request must be treated as potentially
-sensitive.
-
-PR mode compares the generated file with the remote base branch, refuses to
-overwrite a pre-existing branch with unrelated changes unless it already has
-an open StateImport PR, and never commits Terraform state. The token must have
-read access to the state repository and write plus pull-request access to the
-target repository. A GitHub App installation token is preferred for this
-cross-repository case.
+Import proposals are read-only unless explicit PR mode is enabled. PR mode
+writes only the configured imports file, never Terraform state. Generated
+import IDs can be sensitive, so protect the target repository and review the PR.
 
 ## Residual risks
 
-- GitHub Release replacement is not atomic and does not provide native backend
-  transactions or locking.
-- Plain state assets may contain secrets and rely entirely on repository access
-  controls.
-- A lost age identity makes matching state and backups unrecoverable.
-- A compromised workflow or runner can access local plaintext state and any
-  credentials intentionally provided to it.
-- Filesystem checks reduce path attacks but cannot make an untrusted
-  self-hosted runner safe.
+- Release replacement is not atomic and does not provide locking or
+  transactions.
+- Plain state may contain secrets and depends on repository access controls.
+- A lost age identity makes encrypted state and matching backups unrecoverable.
+- A compromised workflow or runner can read plaintext state and supplied
+  credentials.
+- Filesystem checks cannot make an untrusted self-hosted runner safe.
 
-Consumers must use a shared concurrency group with `cancel-in-progress: false`,
-least-privilege credentials, reviewed workflows, and protected environments for
-destructive recovery.
+Use least-privilege credentials, a shared concurrency group with
+`cancel-in-progress: false`, reviewed workflows, and protected recovery
+environments.

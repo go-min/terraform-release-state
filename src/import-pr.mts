@@ -51,7 +51,7 @@ function pullRequestBody(
 ### Safety boundary
 
 - Only \`${path}\` is changed by this PR.
-- Terraform is not run and infrastructure is not modified by StateImport.
+- Terraform is not run and infrastructure is not modified by the import proposal.
 - Terraform state, credentials, and private keys are not committed or returned as outputs.
 - Skipped resources are not guessed or silently converted into import blocks.
 
@@ -129,6 +129,6 @@ export async function prepareImportPullRequest(
       body,
     );
   }
-  core.info(`StateImport: pull request ${pullRequest.html_url}`);
+  core.info(`Import proposals: pull request ${pullRequest.html_url}`);
   return { baseContent, url: pullRequest.html_url };
 }
