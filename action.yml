@@ -1,0 +1,112 @@
+name: Terraform Release State
+description: Store, restore, verify, encrypt, and back up Terraform state with GitHub Release assets.
+author: ter-sh
+inputs:
+  operation:
+    description: "State operation: restore, save, reset, or import."
+    required: true
+  github-token:
+    description: Token with the required Contents access to the state repository.
+    required: true
+  state-repository:
+    description: owner/name of the repository that stores the Release asset.
+    required: false
+    default: ""
+  release-tag:
+    description: GitHub Release tag used for state storage.
+    required: false
+    default: terraform-state
+  state-asset:
+    description: Current state asset filename.
+    required: false
+    default: terraform.tfstate
+  state-path:
+    description: Workspace-relative path for the local state file; required for restore and save.
+    required: false
+  bootstrap:
+    description: Explicitly allow creation of missing state storage.
+    required: false
+    default: "false"
+  expected-remote-state-marker:
+    description: Marker returned by restore and passed to save for optimistic consistency.
+    required: false
+    default: ""
+  backup-retention:
+    description: Number of backup assets to retain.
+    required: false
+    default: "20"
+  source-commit:
+    description: Commit SHA written to backup metadata.
+    required: false
+    default: ""
+  workflow-run-id:
+    description: Workflow run ID written to backup metadata.
+    required: false
+    default: ""
+  confirmation:
+    description: "Required exact confirmation RESET for the destructive reset operation."
+    required: false
+    default: ""
+  imports-path:
+    description: Workspace-relative path to the proposed Terraform imports file.
+    required: false
+    default: ./imports.generated.tf
+  create-pr:
+    description: Explicitly create or update a pull request for a changed imports file.
+    required: false
+    default: "false"
+  pr-base:
+    description: Base branch for the Terraform import proposal pull request; defaults to GITHUB_REF_NAME.
+    required: false
+    default: ""
+  pr-branch:
+    description: Branch for the Terraform import proposal pull request; defaults to terraform-release-state/<imports-filename>.
+    required: false
+    default: ""
+  pr-title:
+    description: Pull request title for the Terraform import proposal.
+    required: false
+    default: "chore(terraform): update generated imports"
+  encryption:
+    description: "State encryption mode: none or age."
+    required: false
+    default: none
+  age-recipients:
+    description: Newline-delimited age1 recipients required to save with encryption=age.
+    required: false
+    default: ""
+  age-identities:
+    description: Secret newline-delimited AGE-SECRET-KEY-1 identities required to restore with encryption=age.
+    required: false
+    default: ""
+outputs:
+  operation:
+    description: Completed operation.
+  bootstrapped:
+    description: Whether this operation explicitly created missing state storage.
+  release-id:
+    description: GitHub Release ID.
+  state-asset-id:
+    description: Current state asset ID after the operation, when present.
+  remote-state-marker:
+    description: Opaque marker to pass from restore to save.
+  state-digest:
+    description: SHA-256 digest of the local state asset.
+  state-sha256:
+    description: SHA-256 checksum of the local state file.
+  backup-asset-name:
+    description: Backup asset created during save, when applicable.
+  backup-count:
+    description: Number of retained backup assets after save.
+  reset-deleted-asset-count:
+    description: Number of state and backup assets deleted by reset.
+  reset-release-found:
+    description: Whether reset found the target state release.
+  import-pr-url:
+    description: Pull request URL created or reused for the Terraform import proposal, when enabled.
+runs:
+  using: node24
+  main: dist/index.js
+branding:
+  icon: database
+  color: blue

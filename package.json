@@ -1,0 +1,40 @@
+{
+  "name": "terraform-release-state",
+  "version": "0.2.1",
+  "private": true,
+  "description": "GitHub Action for Terraform state storage using GitHub Release assets",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ter-sh/terraform-release-state.git"
+  },
+  "homepage": "https://github.com/ter-sh/terraform-release-state#readme",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "trap 'rm -rf .build' EXIT; tsc -p tsconfig.build.json && cp .build/src/main.mjs .build/src/main.js && rm -f dist/index.mjs dist/index.mjs.map && ncc build .build/src/main.js --minify --source-map",
+    "format": "biome format --write package.json src tests && prettier --write action.yml '.github/workflows/*.yml' '**/*.md'",
+    "format:check": "biome format package.json commitlint.config.mjs src tests && prettier --check action.yml '.github/workflows/*.yml' '**/*.md'",
+    "lint": "biome lint package.json commitlint.config.mjs src tests && markdownlint-cli2 '**/*.md' '#node_modules/**'",
+    "test": "trap 'rm -rf .test-build' EXIT; tsc -p tsconfig.test.json && node --experimental-strip-types --test tests/*.test.mts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/github": "9.1.1",
+    "age-encryption": "0.3.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "@commitlint/cli": "21.2.1",
+    "@commitlint/config-conventional": "21.2.0",
+    "@types/node": "24.13.3",
+    "@vercel/ncc": "0.44.1",
+    "markdownlint-cli2": "0.23.1",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.17.0"
+}

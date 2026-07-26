@@ -1,0 +1,7 @@
+node_modules/
+.pnpm-store/
+lib/
+.build/
+.test-build/
+coverage/
+*.log
