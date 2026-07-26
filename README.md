@@ -23,7 +23,7 @@ assets.
 - recovery after a partially failed state replacement;
 - optional `age` encryption with native X25519 recipients;
 - same-repository and cross-repository state storage;
-- a read-only `StateImport` proof of concept for proposing Terraform imports;
+- a read-only `StateImport` operation for proposing Terraform imports;
 - no Terraform state, token, or private key outputs.
 
 GitHub Releases provide a repository-scoped asset store with permissions,
@@ -66,8 +66,6 @@ steps:
       github-token: ${{ github.token }}
       state-path: terraform.tfstate
       expected-remote-state-marker: ${{ steps.state.outputs.remote-state-marker }}
-      source-commit: ${{ github.sha }}
-      workflow-run-id: ${{ github.run_id }}
 ```
 
 The default storage location is the current repository, Release tag
@@ -78,13 +76,13 @@ same concurrency group. Concurrency groups do not coordinate across different
 repositories; cross-repository writers rely on the action's consistency check
 to reject stale saves and should be operationally serialized where possible.
 
-### StateImport proof of concept
+### StateImport
 
 `operation: import` downloads the current state asset from GitHub Release,
 validates it like `restore`, proposes import blocks for managed instances with
 a string or numeric `attributes.id`, and prints a diff without modifying the
 workspace. It skips data resources and instances without a usable ID. The
-output location and filename are separate inputs:
+The output file path is configurable:
 
 ```yaml
 - name: Propose Terraform imports
@@ -92,14 +90,37 @@ output location and filename are separate inputs:
   with:
     operation: import
     github-token: ${{ github.token }}
-    imports-path: infrastructure
-    imports-file: generated-imports.tf
+    imports-path: infrastructure/generated-imports.tf
 ```
 
-This is a POC, not a provider-aware import planner. Review provider-specific
-IDs and the corresponding resource configuration before applying. It does not
-write files, run Terraform, create commits, or open pull requests. The state is
-never returned through outputs and is not written to the workspace.
+StateImport is not a provider-aware import planner. Review provider-specific
+IDs and the corresponding resource configuration before applying. In its
+default mode it only prints a diff: it does not write files, create commits, or
+open pull requests. Terraform is never run, and state is never returned through
+outputs or written to the workspace.
+
+To opt in to PR creation, set `create-pr: "true"`:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+
+with:
+  operation: import
+  create-pr: "true"
+  imports-path: infrastructure/generated-imports.tf
+```
+
+`pr-base` defaults to `GITHUB_REF_NAME`; `pr-branch` is derived from the
+imports filename. Set them explicitly only when the workflow ref is not the
+intended writable base branch.
+
+The action compares the generated file with the remote base branch. If it is
+different, it creates or reuses the named branch, commits only the imports file,
+and opens or reuses one open pull request. The default is `create-pr: "false"`.
+An existing branch with unrelated manual changes is rejected rather than
+overwritten. The PR does not run Terraform or apply infrastructure changes.
 
 ## Lifecycle
 
@@ -176,34 +197,39 @@ classic PAT as the primary production credential.
 
 Minimum token permissions:
 
-| Operation           | Repository permission |
-| ------------------- | --------------------- |
-| `restore`           | Contents: read        |
-| `restore` bootstrap | Contents: write       |
-| `save`              | Contents: write       |
-| `reset`             | Contents: write       |
+| Operation           | Repository permission                    |
+| ------------------- | ---------------------------------------- |
+| `restore`           | Contents: read                           |
+| `restore` bootstrap | Contents: write                          |
+| `save`              | Contents: write                          |
+| `reset`             | Contents: write                          |
+| `import`            | Contents: read                           |
+| `import` with PR    | Contents: write and Pull requests: write |
 
 ## Inputs
 
-| Input                          | Default             | Description                                                         |
-| ------------------------------ | ------------------- | ------------------------------------------------------------------- |
-| `operation`                    | required            | `restore`, `save`, `reset`, or `import`                             |
-| `github-token`                 | required            | Token with access to the state repository                           |
-| `state-repository`             | current repository  | Repository in `owner/name` format                                   |
-| `release-tag`                  | `terraform-state`   | Dedicated state Release tag                                         |
-| `state-asset`                  | `terraform.tfstate` | Current state asset name                                            |
-| `state-path`                   | —                   | Workspace-relative file path; required for restore/save             |
-| `bootstrap`                    | `false`             | Explicitly allow missing storage creation                           |
-| `expected-remote-state-marker` | empty               | Marker returned by restore and required for updating existing state |
-| `backup-retention`             | `20`                | Number of backup pairs to retain, from `0` through `1000`           |
-| `source-commit`                | empty               | Commit SHA recorded in backup metadata                              |
-| `workflow-run-id`              | empty               | Workflow run ID recorded in backup metadata                         |
-| `confirmation`                 | empty               | Must equal `RESET` for reset                                        |
-| `encryption`                   | `none`              | `none` or `age`                                                     |
-| `age-recipients`               | empty               | Newline-delimited public recipients required for encrypted save     |
-| `age-identities`               | empty               | Secret newline-delimited identities required for encrypted restore  |
-| `imports-path`                 | `.`                 | Workspace-relative directory for the StateImport output             |
-| `imports-file`                 | `imports.tf`        | Filename for the StateImport output                                 |
+| Input                          | Default                  | Description                                                         |
+| ------------------------------ | ------------------------ | ------------------------------------------------------------------- |
+| `operation`                    | required                 | `restore`, `save`, `reset`, or `import`                             |
+| `github-token`                 | required                 | Token with access to the state repository                           |
+| `state-repository`             | current repository       | Repository in `owner/name` format                                   |
+| `release-tag`                  | `terraform-state`        | Dedicated state Release tag                                         |
+| `state-asset`                  | `terraform.tfstate`      | Current state asset name                                            |
+| `state-path`                   | —                        | Workspace-relative file path; required for restore/save             |
+| `bootstrap`                    | `false`                  | Explicitly allow missing storage creation                           |
+| `expected-remote-state-marker` | empty                    | Marker returned by restore and required for updating existing state |
+| `backup-retention`             | `20`                     | Number of backup pairs to retain, from `0` through `1000`           |
+| `source-commit`                | `GITHUB_SHA`             | Commit SHA recorded in backup metadata                              |
+| `workflow-run-id`              | `GITHUB_RUN_ID`          | Workflow run ID recorded in backup metadata                         |
+| `confirmation`                 | empty                    | Must equal `RESET` for reset                                        |
+| `encryption`                   | `none`                   | `none` or `age`                                                     |
+| `age-recipients`               | empty                    | Newline-delimited public recipients required for encrypted save     |
+| `age-identities`               | empty                    | Secret newline-delimited identities required for encrypted restore  |
+| `imports-path`                 | `./imports.generated.tf` | Workspace-relative path to the StateImport output file              |
+| `create-pr`                    | `false`                  | Opt in to creating or updating a StateImport pull request           |
+| `pr-base`                      | current ref              | Base branch for the pull request                                    |
+| `pr-branch`                    | derived                  | Dedicated branch for the pull request                               |
+| `pr-title`                     | conventional title       | Pull request title                                                  |
 
 ## Outputs
 
@@ -220,6 +246,7 @@ Minimum token permissions:
 | `backup-count`              | Retained complete backup pairs                 |
 | `reset-deleted-asset-count` | Assets deleted by reset                        |
 | `reset-release-found`       | Whether reset found the target Release         |
+| `import-pr-url`             | Pull request URL created or reused by import   |
 
 The action never returns state content, credentials, or encryption keys.
 

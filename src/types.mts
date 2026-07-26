@@ -33,6 +33,7 @@ export type ActionConfig = {
   operation: "restore" | "save" | "reset" | "import";
   token: string;
   target: RepositoryTarget;
+  prTarget: RepositoryTarget;
   tag: string;
   assetName: string;
   workspace: string;
@@ -44,7 +45,10 @@ export type ActionConfig = {
   workflowRunId: string;
   resetConfirmation: string;
   importsPath: string;
-  importsFile: string;
+  createPr: boolean;
+  prBase: string;
+  prBranch: string;
+  prTitle: string;
   encryption: EncryptionConfig;
 };
 

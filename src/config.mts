@@ -1,11 +1,12 @@
-import { dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { core, fail } from "./action-core.mjs";
 import {
   parseBoolean,
   parseRepository,
   parseRetention,
   resolveStatePath,
-  resolveImportsPath,
+  resolveWorkspacePath,
+  validateGitRef,
   validateReleaseComponent,
 } from "./validation.mjs";
 import { readEncryptionConfig } from "./encryption.mjs";
@@ -27,8 +28,12 @@ export function readConfig(): ActionConfig {
     fail("operation must be restore, save, reset, or import.");
   }
 
+  const currentRepository = parseRepository(
+    process.env.GITHUB_REPOSITORY || core.getInput("state-repository") || "",
+  );
   const target = parseRepository(
-    core.getInput("state-repository") || process.env.GITHUB_REPOSITORY || "",
+    core.getInput("state-repository") ||
+      `${currentRepository.owner}/${currentRepository.repo}`,
   );
   const tag = core.getInput("release-tag");
   const assetName = core.getInput("state-asset");
@@ -50,13 +55,30 @@ export function readConfig(): ActionConfig {
   if (operation !== "reset" && operation !== "import" && !statePathInput) {
     fail("state-path is required for restore and save.");
   }
-  const importsPath = core.getInput("imports-path") || ".";
-  const importsFile = core.getInput("imports-file") || "imports.tf";
-  const importsOutput = resolveImportsPath(importsPath, importsFile, workspace);
+  const importsPath = resolveWorkspacePath(
+    core.getInput("imports-path") || "./imports.generated.tf",
+    "imports-path",
+    workspace,
+  );
+  const createPr = parseBoolean(core.getInput("create-pr"), "create-pr");
+  const prBase = core.getInput("pr-base") || process.env.GITHUB_REF_NAME || "";
+  const prBranch =
+    core.getInput("pr-branch") ||
+    `stateimport/${basename(importsPath).replace(/[^A-Za-z0-9._-]/g, "-")}`;
+  const prTitle =
+    core.getInput("pr-title") || "chore(terraform): update generated imports";
+  if (operation === "import" && createPr) {
+    validateGitRef(prBase, "pr-base");
+    validateGitRef(prBranch, "pr-branch");
+    if (prBase === prBranch) {
+      fail("pr-base and pr-branch must be different.");
+    }
+  }
   return {
     operation,
     token,
     target,
+    prTarget: currentRepository,
     tag,
     assetName,
     workspace,
@@ -64,11 +86,16 @@ export function readConfig(): ActionConfig {
     bootstrap: parseBoolean(core.getInput("bootstrap"), "bootstrap"),
     expectedMarker: core.getInput("expected-remote-state-marker"),
     backupRetention: parseRetention(core.getInput("backup-retention")),
-    sourceCommit: core.getInput("source-commit"),
-    workflowRunId: core.getInput("workflow-run-id"),
+    sourceCommit:
+      core.getInput("source-commit") || process.env.GITHUB_SHA || "",
+    workflowRunId:
+      core.getInput("workflow-run-id") || process.env.GITHUB_RUN_ID || "",
     resetConfirmation: core.getInput("confirmation"),
-    importsPath: dirname(importsOutput.path),
-    importsFile: importsOutput.file,
+    importsPath,
+    createPr,
+    prBase,
+    prBranch,
+    prTitle,
     encryption,
   };
 }

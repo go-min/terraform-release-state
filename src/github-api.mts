@@ -180,6 +180,151 @@ export async function listAssets(
   ) as Promise<Asset[]>;
 }
 
+export type RepositoryFile = {
+  content: Buffer;
+  sha: string;
+};
+
+export async function getRefSha(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+): Promise<string> {
+  const response = await retry(() =>
+    octokit.rest.git.getRef({ ...target, ref: `heads/${branch}` }),
+  );
+  return response.data.object.sha;
+}
+
+export async function createBranch(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+  sha: string,
+): Promise<string> {
+  try {
+    const response = await retry(() =>
+      octokit.rest.git.createRef({
+        ...target,
+        ref: `refs/heads/${branch}`,
+        sha,
+      }),
+    );
+    return response.data.object.sha;
+  } catch (error) {
+    if ((error as { status?: number }).status !== 422) throw error;
+    return getRefSha(octokit, target, branch);
+  }
+}
+
+export async function getRepositoryFile(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  path: string,
+  branch: string,
+): Promise<RepositoryFile | undefined> {
+  try {
+    const response = await retry(() =>
+      octokit.rest.repos.getContent({ ...target, path, ref: branch }),
+    );
+    const data = response.data;
+    if (Array.isArray(data) || data.type !== "file" || !data.content) {
+      fail(`Repository path ${path} is not a regular file.`);
+    }
+    return {
+      content: Buffer.from(data.content.replaceAll(/\s/g, ""), "base64"),
+      sha: data.sha,
+    };
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return undefined;
+    throw error;
+  }
+}
+
+export async function updateRepositoryFile(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  path: string,
+  branch: string,
+  content: Buffer,
+  message: string,
+  sha?: string,
+): Promise<void> {
+  try {
+    await octokit.rest.repos.createOrUpdateFileContents({
+      ...target,
+      path,
+      branch,
+      message,
+      content: content.toString("base64"),
+      ...(sha ? { sha } : {}),
+    });
+  } catch (error) {
+    const existing = await getRepositoryFile(octokit, target, path, branch);
+    if (!existing?.content.equals(content)) throw error;
+  }
+}
+
+export type PullRequest = {
+  html_url: string;
+  number: number;
+};
+
+export async function findOpenPullRequest(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+  base: string,
+): Promise<PullRequest | undefined> {
+  const response = await retry(() =>
+    octokit.rest.pulls.list({
+      ...target,
+      state: "open",
+      head: `${target.owner}:${branch}`,
+      base,
+      per_page: 10,
+    }),
+  );
+  return response.data[0];
+}
+
+export async function createPullRequest(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+  base: string,
+  title: string,
+  body: string,
+): Promise<PullRequest> {
+  const response = await retry(() =>
+    octokit.rest.pulls.create({
+      ...target,
+      head: branch,
+      base,
+      title,
+      body,
+    }),
+  );
+  return response.data;
+}
+
+export async function updatePullRequest(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  number: number,
+  title: string,
+  body: string,
+): Promise<void> {
+  await retry(() =>
+    octokit.rest.pulls.update({
+      ...target,
+      pull_number: number,
+      title,
+      body,
+    }),
+  );
+}
+
 export function findAsset(items: Asset[], name: string): Asset | undefined {
   const matches = items.filter(
     (asset) => asset.name === name && asset.state === "uploaded",

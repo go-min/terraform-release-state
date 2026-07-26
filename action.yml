@@ -48,13 +48,25 @@ inputs:
     required: false
     default: ""
   imports-path:
-    description: Workspace-relative directory for the proposed imports file in StateImport.
+    description: Workspace-relative path to the proposed Terraform imports file.
     required: false
-    default: "."
-  imports-file:
-    description: Filename for the proposed Terraform imports file in StateImport.
+    default: ./imports.generated.tf
+  create-pr:
+    description: Explicitly create or update a pull request for a changed imports file.
     required: false
-    default: imports.tf
+    default: "false"
+  pr-base:
+    description: Base branch for the StateImport pull request; defaults to GITHUB_REF_NAME.
+    required: false
+    default: ""
+  pr-branch:
+    description: Branch for the StateImport pull request; derived by default.
+    required: false
+    default: ""
+  pr-title:
+    description: Pull request title for StateImport.
+    required: false
+    default: "chore(terraform): update generated imports"
   encryption:
     description: "State encryption mode: none or age."
     required: false
@@ -90,6 +102,8 @@ outputs:
     description: Number of state and backup assets deleted by reset.
   reset-release-found:
     description: Whether reset found the target state release.
+  import-pr-url:
+    description: Pull request URL created or reused by StateImport, when enabled.
 runs:
   using: node24
   main: dist/index.js
