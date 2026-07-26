@@ -27,6 +27,13 @@ residual risks.
 
 ## Supply chain
 
-Runtime packages and GitHub Actions are pinned. CI runs dependency review,
-CodeQL, production dependency audit, unit tests, and bundle synchronization.
-Dependabot proposes reviewed package and action updates.
+Runtime packages and GitHub Actions are pinned. pnpm requires dependencies to
+be published for at least 72 hours, rejects trust downgrades and exotic
+transitive sources, and fails on unreviewed dependency build scripts. CI uses
+the frozen lockfile, disables install scripts, and runs a full dependency
+audit, dependency review, CodeQL, unit tests, and bundle synchronization.
+
+`js-yaml@5.2.2` is the only age-gate exception because it is the patched
+version for a known high-severity advisory; the exception is version-specific
+and must not be broadened. Dependabot proposes reviewed package and action
+updates.
