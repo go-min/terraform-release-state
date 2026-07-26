@@ -5,6 +5,7 @@ import {
   parseRepository,
   parseRetention,
   resolveStatePath,
+  validateGitRef,
   validateReleaseComponent,
   // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
 } from "../src/validation.mts";
@@ -51,6 +52,14 @@ test("validates action inputs", async (t) => {
       /inside/,
     );
     assert.throws(() => resolveStatePath("", "/workspace"), /non-empty/);
+  });
+
+  await t.test("validates pull request branch refs", () => {
+    assert.doesNotThrow(() =>
+      validateGitRef("stateimport/generated", "branch"),
+    );
+    assert.throws(() => validateGitRef("../main", "branch"), /unsupported/);
+    assert.throws(() => validateGitRef("main:broken", "branch"), /unsupported/);
   });
 
   await t.test("requires explicit reset confirmation", () => {

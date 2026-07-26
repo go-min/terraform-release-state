@@ -3,7 +3,7 @@ description: Store, restore, verify, encrypt, and back up Terraform state with G
 author: ter-sh
 inputs:
   operation:
-    description: "State operation: restore, save, or reset."
+    description: "State operation: restore, save, reset, or import."
     required: true
   github-token:
     description: Token with the required Contents access to the state repository.
@@ -21,7 +21,7 @@ inputs:
     required: false
     default: terraform.tfstate
   state-path:
-    description: Workspace-relative path for the local state file.
+    description: Workspace-relative path for the local state file; required for restore and save.
     required: false
   bootstrap:
     description: Explicitly allow creation of missing state storage.
@@ -47,6 +47,26 @@ inputs:
     description: "Required exact confirmation RESET for the destructive reset operation."
     required: false
     default: ""
+  imports-path:
+    description: Workspace-relative path to the proposed Terraform imports file.
+    required: false
+    default: ./imports.generated.tf
+  create-pr:
+    description: Explicitly create or update a pull request for a changed imports file.
+    required: false
+    default: "false"
+  pr-base:
+    description: Base branch for the StateImport pull request; defaults to GITHUB_REF_NAME.
+    required: false
+    default: ""
+  pr-branch:
+    description: Branch for the StateImport pull request; derived by default.
+    required: false
+    default: ""
+  pr-title:
+    description: Pull request title for StateImport.
+    required: false
+    default: "chore(terraform): update generated imports"
   encryption:
     description: "State encryption mode: none or age."
     required: false
@@ -82,6 +102,8 @@ outputs:
     description: Number of state and backup assets deleted by reset.
   reset-release-found:
     description: Whether reset found the target state release.
+  import-pr-url:
+    description: Pull request URL created or reused by StateImport, when enabled.
 runs:
   using: node24
   main: dist/index.js

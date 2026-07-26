@@ -17,7 +17,11 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-function stateDirectory(path: string, workspace: string): string {
+function stateDirectory(
+  path: string,
+  workspace: string,
+  createMissing: boolean,
+): string {
   const workspacePath = resolve(workspace);
   const pathRelative = relative(workspacePath, path);
   if (!isPathInside(workspacePath, path)) {
@@ -30,7 +34,10 @@ function stateDirectory(path: string, workspace: string): string {
   for (const component of components) {
     if (!component || component === ".") continue;
     const candidate = join(current, component);
-    if (!existsSync(candidate)) mkdirSync(candidate, { mode: 0o700 });
+    if (!existsSync(candidate)) {
+      if (!createMissing) fail("state-path parent directory does not exist.");
+      mkdirSync(candidate, { mode: 0o700 });
+    }
     const info = lstatSync(candidate);
     if (info.isSymbolicLink() || !info.isDirectory()) {
       fail(
@@ -45,8 +52,12 @@ function stateDirectory(path: string, workspace: string): string {
   return current;
 }
 
-function stateFile(path: string, workspace: string): string {
-  const directory = stateDirectory(path, workspace);
+function stateFile(
+  path: string,
+  workspace: string,
+  createMissing: boolean,
+): string {
+  const directory = stateDirectory(path, workspace, createMissing);
   const file = join(directory, basename(path));
   if (existsSync(file)) {
     const info = lstatSync(file);
@@ -58,7 +69,11 @@ function stateFile(path: string, workspace: string): string {
 }
 
 export function readStateFile(path: string, workspace: string): Buffer {
-  return readFileSync(stateFile(path, workspace));
+  return readFileSync(stateFile(path, workspace, true));
+}
+
+export function readExistingStateFile(path: string, workspace: string): Buffer {
+  return readFileSync(stateFile(path, workspace, false));
 }
 
 export function writeStateFile(
@@ -66,7 +81,7 @@ export function writeStateFile(
   workspace: string,
   data: Buffer,
 ): void {
-  const file = stateFile(path, workspace);
+  const file = stateFile(path, workspace, true);
   const temporary = join(
     dirname(file),
     `.${basename(file)}.${randomUUID()}.tmp`,

@@ -33,6 +33,19 @@ Encrypted state uses the interoperable age format with native X25519
 recipients. Identities are masked line-by-line and remain in memory; the action
 does not write them to files or outputs.
 
+`operation: import` is read-only by default. Its optional PR mode writes only
+the configured imports file to a dedicated branch and requires explicit
+`create-pr: "true"`. The generated file can contain provider resource IDs, so
+the target repository and pull request must be treated as potentially
+sensitive.
+
+PR mode compares the generated file with the remote base branch, refuses to
+overwrite a pre-existing branch with unrelated changes unless it already has
+an open StateImport PR, and never commits Terraform state. The token must have
+read access to the state repository and write plus pull-request access to the
+target repository. A GitHub App installation token is preferred for this
+cross-repository case.
+
 ## Residual risks
 
 - GitHub Release replacement is not atomic and does not provide native backend

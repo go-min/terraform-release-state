@@ -3,6 +3,7 @@ import { core } from "./action-core.mjs";
 import { readConfig } from "./config.mjs";
 import { restore, save } from "./state-manager.mjs";
 import { reset } from "./reset.mjs";
+import { generateImports } from "./imports.mjs";
 
 async function run(): Promise<void> {
   const config = readConfig();
@@ -16,6 +17,10 @@ async function run(): Promise<void> {
     core.setOutput("operation", "reset");
     core.setOutput("reset-deleted-asset-count", result.deletedAssetCount);
     core.setOutput("reset-release-found", result.releaseFound);
+    return;
+  }
+  if (config.operation === "import") {
+    await generateImports(context);
     return;
   }
   await save(context);

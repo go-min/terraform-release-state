@@ -39,11 +39,19 @@ export function parseRepository(value: string): {
 }
 
 export function resolveStatePath(value: string, workspace: string): string {
+  return resolveWorkspacePath(value, "state-path", workspace);
+}
+
+export function resolveWorkspacePath(
+  value: string,
+  name: string,
+  workspace: string,
+): string {
   if (!value || value.includes("\0"))
-    throw new Error("state-path must be a non-empty path.");
+    throw new Error(`${name} must be a non-empty path.`);
   const absolute = resolve(workspace, value);
   if (!isPathInside(workspace, absolute)) {
-    throw new Error("state-path must remain inside GITHUB_WORKSPACE.");
+    throw new Error(`${name} must remain inside GITHUB_WORKSPACE.`);
   }
   return absolute;
 }
@@ -51,4 +59,19 @@ export function resolveStatePath(value: string, workspace: string): string {
 export function validateReleaseComponent(value: string, name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value))
     throw new Error(`${name} contains unsupported characters.`);
+}
+
+export function validateGitRef(value: string, name: string): void {
+  if (
+    !value ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.startsWith(".") ||
+    value.endsWith(".") ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    [...value].some((character) => "\0 ~^:?*[]\\".includes(character))
+  ) {
+    throw new Error(`${name} contains unsupported Git ref characters.`);
+  }
 }
