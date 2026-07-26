@@ -1,2 +1,13 @@
+minimumReleaseAge: 4320
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+minimumReleaseAgeExclude:
+  - js-yaml@5.2.2
+trustPolicy: no-downgrade
+blockExoticSubdeps: true
+strictDepBuilds: true
+allowBuilds: {}
 overrides:
+  es-toolkit: 1.49.0
   js-yaml: 5.2.2
+  undici: 6.27.0
