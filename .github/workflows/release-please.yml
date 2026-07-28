@@ -31,4 +31,3 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
-          skip-labeling: true
