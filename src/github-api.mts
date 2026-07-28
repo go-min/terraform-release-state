@@ -1,4 +1,4 @@
-import { metadataName } from "./asset-names.mjs";
+import { manifestName, metadataName, signatureName } from "./asset-names.mjs";
 import { assetDigest, sha256 } from "./integrity.mjs";
 import type { Asset, Octokit, Release, RepositoryTarget } from "./types.mjs";
 
@@ -117,10 +117,12 @@ export function managedReleaseBody(
 - **Repository:** [\`${repository}\`](https://github.com/${repository})
 - **Release tag:** \`${tag}\`
 - **Current state:** \`${assetName}\`
-- **Optional state metadata:** \`${metadataName(assetName)}\` (present only when the current state uses age encryption)
-- **Recovery backups:** \`${assetName}.backup-*\` with matching \`.metadata.json\` assets
+- **State manifest:** \`${manifestName(assetName)}\`
+- **Optional signature:** \`${signatureName(assetName)}\`
+- **Compatibility metadata:** \`${metadataName(assetName)}\` (present only when the current state uses age encryption)
+- **Recovery backups:** \`${assetName}.backup-*\` with matching manifest and compatibility metadata assets
 
-The current state asset is authoritative. If it is absent, this storage has been bootstrapped and is awaiting its first save. Backups are retained only for recovery. The action validates asset integrity and refuses stale writes through optimistic consistency checks.
+The current state asset and its manifest are authoritative. If the state asset is absent, this storage has been bootstrapped and is awaiting its first save. Backups are retained only for recovery. The action validates asset integrity and refuses stale writes through optimistic consistency checks.
 
 Managed by [Terraform Release State](${actionUrl}). See the [documentation](${actionUrl}#readme) and [recovery guide](${actionUrl}/blob/main/docs/recovery.md) before changing any asset manually.`;
 }

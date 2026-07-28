@@ -45,6 +45,17 @@ describe("action metadata", () => {
     assert.match(metadata, /state-path:[\s\S]*required: false/);
     assert.match(metadata, /stored-state-sha256:/);
     assert.match(metadata, /plaintext-state-sha256:/);
+    assert.match(metadata, /signature-policy:/);
+    assert.match(metadata, /signing-private-key:/);
+    assert.match(metadata, /verification-public-keys:/);
+    assert.match(metadata, /storage-format:/);
+    assert.match(metadata, /manifest-schema-version:/);
+    assert.match(metadata, /signature-status:/);
+    assert.match(metadata, /signature-key-fingerprint:/);
+    assert.match(metadata, /stored-state-verification:/);
+    assert.match(metadata, /plaintext-state-verification:/);
+    assert.match(metadata, /warning-codes-json:/);
+    assert.match(metadata, /error-code:/);
     assert.match(metadata, /state-write-committed:/);
     assert.match(metadata, /state-phase:/);
     assert.match(metadata, /state-status:/);

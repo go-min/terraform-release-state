@@ -70,7 +70,7 @@ The stable tag identifies the intended release, but workflow examples should
 pin its immutable release commit:
 
 ```yaml
-uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
+uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
 ```
 
 When upgrading, verify the tag and GitHub Release, replace the full SHA, and

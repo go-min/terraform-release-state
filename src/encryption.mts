@@ -1,8 +1,9 @@
 import { Decrypter, Encrypter } from "age-encryption";
+import { failWithCode } from "./errors.mjs";
 import type { EncryptionConfig } from "./types.mjs";
 
 function fail(message: string): never {
-  throw new Error(message);
+  failWithCode("TRS_CONFIG_INVALID", message);
 }
 
 function lines(value: string): string[] {
@@ -76,7 +77,10 @@ export async function decryptState(
 ): Promise<Buffer> {
   if (config.mode === "none") return ciphertext;
   if (config.identities.length === 0) {
-    fail("age-identities is required to restore encrypted state.");
+    failWithCode(
+      "TRS_DECRYPTION_FAILED",
+      "age-identities is required to restore encrypted state.",
+    );
   }
   try {
     const decrypter = new Decrypter();
@@ -85,6 +89,9 @@ export async function decryptState(
     }
     return Buffer.from(await decrypter.decrypt(ciphertext));
   } catch {
-    fail("Unable to decrypt state with the configured age identities.");
+    failWithCode(
+      "TRS_DECRYPTION_FAILED",
+      "Unable to decrypt state with the configured age identities.",
+    );
   }
 }

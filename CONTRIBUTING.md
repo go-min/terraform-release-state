@@ -26,7 +26,8 @@ changes affect runtime behavior.
 
 - Preserve optimistic consistency and fail-closed bootstrap behavior.
 - Never log or output state, credentials, tokens, or private keys.
-- Keep state paths workspace-relative and backup metadata in `.metadata.json`.
+- Keep state paths workspace-relative and preserve the flat manifest,
+  signature, and compatibility-metadata bundle naming contract.
 - Pin dependency changes in both `package.json` and `pnpm-lock.yaml`.
 - Use disposable Release tags for integration tests and always clean them up.
 - Document public API, state format, encryption, and recovery changes.

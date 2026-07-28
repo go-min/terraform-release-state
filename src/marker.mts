@@ -1,8 +1,9 @@
 import { assetDigest } from "./integrity.mjs";
+import { failWithCode } from "./errors.mjs";
 import type { Asset, DecodedMarker, RemoteStateMarker } from "./types.mjs";
 
 function fail(message: string): never {
-  throw new Error(message);
+  failWithCode("TRS_CONFIG_INVALID", message);
 }
 
 export function marker(asset: Asset | undefined): string {

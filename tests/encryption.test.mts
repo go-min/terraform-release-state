@@ -1,11 +1,9 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import {
-  decryptState,
-  encryptState,
-  readEncryptionConfig,
-  // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-} from "../src/encryption.mts";
+const { decryptState, encryptState, readEncryptionConfig } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/encryption.mjs"
+);
 import { generateIdentity, identityToRecipient } from "age-encryption";
 
 test("age encryption round-trips state without exposing plaintext", async () => {
@@ -40,7 +38,19 @@ test("age encryption does not disclose identity errors", async () => {
     Buffer.from("state"),
   );
   await assert.rejects(
+    decryptState(readEncryptionConfig("age", "", ""), ciphertext),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "TRS_DECRYPTION_FAILED" &&
+      /age-identities is required/.test(error.message),
+  );
+  await assert.rejects(
     decryptState(readEncryptionConfig("age", "", wrongIdentity), ciphertext),
-    /Unable to decrypt state/,
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "TRS_DECRYPTION_FAILED" &&
+      /Unable to decrypt state/.test(error.message),
   );
 });

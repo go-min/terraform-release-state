@@ -36,6 +36,21 @@ test("reset only recognizes current state and backup namespace", () => {
     true,
   );
   assert.equal(
+    isResetAsset("terraform.tfstate.manifest.json", "terraform.tfstate"),
+    true,
+  );
+  assert.equal(
+    isResetAsset("terraform.tfstate.manifest.sig.json", "terraform.tfstate"),
+    true,
+  );
+  assert.equal(
+    isResetAsset(
+      "terraform.tfstate.backup-a.manifest.sig.json",
+      "terraform.tfstate",
+    ),
+    true,
+  );
+  assert.equal(
     isResetAsset(
       "terraform.tfstate.backup-20260725T120000Z",
       "terraform.tfstate",
