@@ -2,6 +2,13 @@
 
 Release history for Terraform Release State.
 
+## [0.3.1](https://github.com/go-min/terraform-release-state/compare/v0.3.0...v0.3.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* harden state persistence lifecycle ([#33](https://github.com/go-min/terraform-release-state/issues/33)) ([fbbe5e3](https://github.com/go-min/terraform-release-state/commit/fbbe5e3d33a8c399eee23e9e3c50f979cb9d666d))
+
 ## [0.3.0](https://github.com/go-min/terraform-release-state/compare/v0.2.1...v0.3.0) (2026-07-28)
 
 
