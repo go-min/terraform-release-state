@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -11,9 +12,12 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 
 const testModulePath: string = "../.test-build/src/imports.mjs";
-const { candidatesFromState, generateImports, renderImports } = await import(
-  testModulePath
-);
+const {
+  candidatesFromState,
+  generateImports,
+  localImportsDiffBase,
+  renderImports,
+} = await import(testModulePath);
 
 test("StateImport creates deterministic candidates for managed instances", () => {
   const result = candidatesFromState({
@@ -229,6 +233,7 @@ test("StateImport reads the Release asset and does not create a local state file
   );
   const statePath = join(workspace, "not-created.tfstate");
   const importsPath = join(workspace, "imports.tf");
+  const outputFile = join(workspace, "outputs.txt");
   const state = Buffer.from(
     JSON.stringify({
       resources: [
@@ -274,6 +279,7 @@ test("StateImport reads the Release asset and does not create a local state file
     workflowRunId: "",
     resetConfirmation: "",
     importsPath,
+    terraformRoot: workspace,
     createPr: false,
     prBase: "main",
     prBranch: "terraform-release-state/imports.tf",
@@ -282,16 +288,37 @@ test("StateImport reads the Release asset and does not create a local state file
   } as never;
 
   try {
+    process.env.GITHUB_OUTPUT = outputFile;
     await generateImports({ octokit, config });
     assert.equal(readFileSync(importsPath, "utf8"), "# existing\n");
     assert.equal(existsSync(statePath), false);
+    const outputs = readFileSync(outputFile, "utf8");
+    assert.match(outputs, /operation<<[^\n]+\nimport\n/);
+    assert.match(outputs, /import-candidate-count<<[^\n]+\n1\n/);
+    assert.match(outputs, /import-skipped-count<<[^\n]+\n0\n/);
+    assert.match(outputs, /import-collision-count<<[^\n]+\n0\n/);
+    assert.match(outputs, /import-pr-action<<[^\n]+\ndisabled\n/);
   } finally {
+    delete process.env.GITHUB_OUTPUT;
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("StateImport creates one pull request from the remote base diff", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "terraform-release-state-pr-"));
+test("StateImport suppresses a target declared in a non-generated tf file", async () => {
+  const workspace = mkdtempSync(
+    join(tmpdir(), "terraform-release-state-collision-"),
+  );
+  const importsPath = join(workspace, "imports.generated.tf");
+  const outputFile = join(workspace, "outputs.txt");
+  writeFileSync(
+    join(workspace, "existing.tf"),
+    `import {
+  to = aws_instance.web
+  id = "i-existing"
+}
+`,
+  );
+  writeFileSync(importsPath, "# generated file is excluded from scanning\n");
   const state = Buffer.from(
     JSON.stringify({
       resources: [
@@ -299,13 +326,11 @@ test("StateImport creates one pull request from the remote base diff", async () 
           mode: "managed",
           type: "aws_instance",
           name: "web",
-          instances: [{ attributes: { id: "i-pr" } }],
+          instances: [{ attributes: { id: "i-remote" } }],
         },
       ],
     }),
   );
-  const baseContent = Buffer.from("# base imports\n");
-  const calls: Array<{ method: string; options: Record<string, unknown> }> = [];
   const octokit = {
     paginate: async () => [
       {
@@ -317,55 +342,9 @@ test("StateImport creates one pull request from the remote base diff", async () 
     ],
     request: async () => ({ data: state }),
     rest: {
-      git: {
-        getRef: async (options: Record<string, unknown>) => {
-          calls.push({ method: "getRef", options });
-          return { data: { object: { sha: "base-sha" } } };
-        },
-        createRef: async (options: Record<string, unknown>) => {
-          calls.push({ method: "createRef", options });
-          return { data: { object: { sha: "branch-sha" } } };
-        },
-      },
       repos: {
         getReleaseByTag: async () => ({ data: { id: 1 } }),
         listReleaseAssets: "list",
-        getContent: async (options: Record<string, unknown>) => {
-          calls.push({ method: "getContent", options });
-          if (options.ref === "main") {
-            return {
-              data: {
-                type: "file",
-                content: baseContent.toString("base64"),
-                sha: "base-file-sha",
-              },
-            };
-          }
-          throw Object.assign(new Error("missing branch file"), {
-            status: 404,
-          });
-        },
-        createOrUpdateFileContents: async (
-          options: Record<string, unknown>,
-        ) => {
-          calls.push({ method: "updateFile", options });
-          return { data: {} };
-        },
-      },
-      pulls: {
-        list: async (options: Record<string, unknown>) => {
-          calls.push({ method: "listPulls", options });
-          return { data: [] };
-        },
-        create: async (options: Record<string, unknown>) => {
-          calls.push({ method: "createPull", options });
-          return {
-            data: {
-              html_url: "https://github.com/go-min/state/pull/1",
-              number: 1,
-            },
-          };
-        },
       },
     },
   } as never;
@@ -373,7 +352,7 @@ test("StateImport creates one pull request from the remote base diff", async () 
     operation: "import",
     token: "token",
     target: { owner: "go-min", repo: "state" },
-    prTarget: { owner: "go-min", repo: "consumer" },
+    prTarget: { owner: "go-min", repo: "state" },
     tag: "terraform-state",
     assetName: "terraform.tfstate",
     workspace,
@@ -384,41 +363,56 @@ test("StateImport creates one pull request from the remote base diff", async () 
     sourceCommit: "",
     workflowRunId: "",
     resetConfirmation: "",
-    importsPath: join(workspace, "imports.tf"),
-    createPr: true,
+    importsPath,
+    terraformRoot: workspace,
+    createPr: false,
     prBase: "main",
-    prBranch: "terraform-release-state/imports.tf",
+    prBranch: "terraform-release-state/imports.generated.tf",
     prTitle: "chore(terraform): update generated imports",
     encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
 
   try {
+    process.env.GITHUB_OUTPUT = outputFile;
     await generateImports({ octokit, config });
-    const update = calls.find((call) => call.method === "updateFile");
-    const createPull = calls.find((call) => call.method === "createPull");
-    assert.ok(update);
-    assert.equal(update.options.branch, "terraform-release-state/imports.tf");
-    assert.equal(update.options.path, "imports.tf");
-    assert.equal(update.options.sha, undefined);
-    assert.ok(createPull);
-    assert.equal(createPull.options.base, "main");
-    assert.equal(createPull.options.head, "terraform-release-state/imports.tf");
-    assert.equal(createPull.options.repo, "consumer");
-    assert.match(String(createPull.options.title), /generated imports/);
-    assert.match(String(createPull.options.body), /Terraform import proposal/);
-    assert.match(String(createPull.options.body), /Review checklist/);
-    assert.match(String(createPull.options.body), /Safety boundary/);
-    assert.match(String(createPull.options.body), /Import candidates.*1/);
-    assert.match(
-      String(createPull.options.body),
-      /State repository \| `go-min\/state`/,
+    const outputs = readFileSync(outputFile, "utf8");
+    assert.match(outputs, /import-candidate-count<<[^\n]+\n0\n/);
+    assert.match(outputs, /import-skipped-count<<[^\n]+\n1\n/);
+    assert.match(outputs, /import-collision-count<<[^\n]+\n1\n/);
+    assert.equal(
+      readFileSync(importsPath, "utf8"),
+      "# generated file is excluded from scanning\n",
     );
-    assert.match(
-      String(createPull.options.body),
-      /Target repository \| `go-min\/consumer`/,
+  } finally {
+    delete process.env.GITHUB_OUTPUT;
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("StateImport never reads a local imports symlink", () => {
+  const workspace = mkdtempSync(
+    join(tmpdir(), "terraform-release-state-import-link-"),
+  );
+  const outside = mkdtempSync(
+    join(tmpdir(), "terraform-release-state-import-secret-"),
+  );
+  const outsideFile = join(outside, "secret.tf");
+  const importsPath = join(workspace, "imports.generated.tf");
+  writeFileSync(outsideFile, "EXTERNAL_IMPORT_CONTENT\n");
+  symlinkSync(outsideFile, importsPath, "file");
+
+  try {
+    assert.throws(
+      () => localImportsDiffBase(workspace, importsPath, false),
+      /imports-path must not be a symbolic link/,
     );
-    assert.doesNotMatch(String(createPull.options.body), /i-pr/);
+    assert.equal(
+      localImportsDiffBase(workspace, importsPath, true),
+      "",
+      "PR mode must not inspect the workspace imports path",
+    );
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });

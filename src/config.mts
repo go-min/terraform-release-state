@@ -60,6 +60,11 @@ export function readConfig(): ActionConfig {
     "imports-path",
     workspace,
   );
+  const terraformRoot = resolveWorkspacePath(
+    core.getInput("terraform-root") || ".",
+    "terraform-root",
+    workspace,
+  );
   const createPr = parseBoolean(core.getInput("create-pr"), "create-pr");
   const prBase = core.getInput("pr-base") || process.env.GITHUB_REF_NAME || "";
   const prBranch =
@@ -92,6 +97,7 @@ export function readConfig(): ActionConfig {
       core.getInput("workflow-run-id") || process.env.GITHUB_RUN_ID || "",
     resetConfirmation: core.getInput("confirmation"),
     importsPath,
+    terraformRoot,
     createPr,
     prBase,
     prBranch,

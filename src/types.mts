@@ -45,6 +45,7 @@ export type ActionConfig = {
   workflowRunId: string;
   resetConfirmation: string;
   importsPath: string;
+  terraformRoot: string;
   createPr: boolean;
   prBase: string;
   prBranch: string;

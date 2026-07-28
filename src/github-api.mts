@@ -182,7 +182,6 @@ export async function listAssets(
 
 export type RepositoryFile = {
   content: Buffer;
-  sha: string;
 };
 
 export async function getRefSha(
@@ -194,6 +193,19 @@ export async function getRefSha(
     octokit.rest.git.getRef({ ...target, ref: `heads/${branch}` }),
   );
   return response.data.object.sha;
+}
+
+export async function getOptionalRefSha(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+): Promise<string | undefined> {
+  try {
+    return await getRefSha(octokit, target, branch);
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return undefined;
+    throw error;
+  }
 }
 
 export async function createBranch(
@@ -217,6 +229,174 @@ export async function createBranch(
   }
 }
 
+type TreeEntry = {
+  mode?: string;
+  path?: string;
+  sha?: string | null;
+  type?: string;
+};
+
+async function commitTreeSha(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  commitSha: string,
+): Promise<string> {
+  const response = await retry(() =>
+    octokit.rest.git.getCommit({ ...target, commit_sha: commitSha }),
+  );
+  return response.data.tree.sha;
+}
+
+async function recursiveTree(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  treeSha: string,
+): Promise<Map<string, string>> {
+  const response = await retry(() =>
+    octokit.rest.git.getTree({
+      ...target,
+      tree_sha: treeSha,
+      recursive: "true",
+    }),
+  );
+  if (response.data.truncated) {
+    fail(
+      `Repository tree ${treeSha} is too large to inspect safely; refusing to refresh the import PR branch.`,
+    );
+  }
+  const entries = new Map<string, string>();
+  for (const entry of response.data.tree as TreeEntry[]) {
+    if (!entry.path || entry.type === "tree") continue;
+    entries.set(
+      entry.path,
+      `${entry.mode || ""}:${entry.type || ""}:${entry.sha || ""}`,
+    );
+  }
+  return entries;
+}
+
+export async function inspectBranchDiff(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  base: string,
+  branch: string,
+): Promise<{ baseIsAncestor: boolean; changedPaths: string[] }> {
+  const comparison = await retry(() =>
+    octokit.rest.repos.compareCommitsWithBasehead({
+      ...target,
+      basehead: `${base}...${branch}`,
+      per_page: 1,
+    }),
+  );
+  const mergeBaseSha = comparison.data.merge_base_commit.sha;
+  if (!mergeBaseSha) {
+    fail(
+      `Cannot determine the merge base for ${base} and ${branch}; refusing to refresh the import PR branch.`,
+    );
+  }
+  const [mergeBaseTree, branchTree] = await Promise.all([
+    commitTreeSha(octokit, target, mergeBaseSha),
+    commitTreeSha(octokit, target, branch),
+  ]);
+  const [before, after] = await Promise.all([
+    recursiveTree(octokit, target, mergeBaseTree),
+    recursiveTree(octokit, target, branchTree),
+  ]);
+  return {
+    baseIsAncestor: mergeBaseSha === base,
+    changedPaths: [...new Set([...before.keys(), ...after.keys()])]
+      .filter((path) => before.get(path) !== after.get(path))
+      .sort(),
+  };
+}
+
+export async function rebuildBranchFromBase(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  branch: string,
+  expectedBranchSha: string,
+  baseSha: string,
+  baseIsAncestor: boolean,
+  path: string,
+  content: Buffer,
+  message: string,
+): Promise<boolean> {
+  const [baseTreeSha, branchTreeSha, blob] = await Promise.all([
+    commitTreeSha(octokit, target, baseSha),
+    commitTreeSha(octokit, target, expectedBranchSha),
+    retry(() =>
+      octokit.rest.git.createBlob({
+        ...target,
+        content: content.toString("base64"),
+        encoding: "base64",
+      }),
+    ),
+  ]);
+  const tree = await retry(() =>
+    octokit.rest.git.createTree({
+      ...target,
+      base_tree: baseTreeSha,
+      tree: [{ path, mode: "100644", type: "blob", sha: blob.data.sha }],
+    }),
+  );
+  if (tree.data.sha === branchTreeSha && baseIsAncestor) return false;
+
+  const parents =
+    expectedBranchSha === baseSha
+      ? [expectedBranchSha]
+      : [expectedBranchSha, baseSha];
+  const commit = await retry(() =>
+    octokit.rest.git.createCommit({
+      ...target,
+      message,
+      tree: tree.data.sha,
+      parents,
+    }),
+  );
+  try {
+    const currentSha = await getRefSha(octokit, target, branch);
+    if (currentSha !== expectedBranchSha) {
+      fail(
+        `PR branch ${branch} changed from expected SHA ${expectedBranchSha} to ${currentSha} during refresh; refusing to overwrite it.`,
+      );
+    }
+    await retry(() =>
+      octokit.rest.git.updateRef({
+        ...target,
+        ref: `heads/${branch}`,
+        sha: commit.data.sha,
+        force: false,
+      }),
+    );
+    return true;
+  } catch (error) {
+    const currentSha = await getRefSha(octokit, target, branch);
+    const currentTreeSha = await commitTreeSha(octokit, target, currentSha);
+    if (currentTreeSha === tree.data.sha) {
+      const currentComparison = await inspectBranchDiff(
+        octokit,
+        target,
+        baseSha,
+        currentSha,
+      );
+      if (
+        currentComparison.baseIsAncestor &&
+        currentComparison.changedPaths.every(
+          (changedPath) => changedPath === path,
+        )
+      ) {
+        return false;
+      }
+    }
+    if (currentSha !== expectedBranchSha) {
+      fail(
+        `PR branch ${branch} changed from expected SHA ${expectedBranchSha} to ${currentSha} during refresh; refusing to overwrite it.`,
+      );
+    }
+    throw error;
+  }
+}
+
 export async function getRepositoryFile(
   octokit: Octokit,
   target: RepositoryTarget,
@@ -233,35 +413,10 @@ export async function getRepositoryFile(
     }
     return {
       content: Buffer.from(data.content.replaceAll(/\s/g, ""), "base64"),
-      sha: data.sha,
     };
   } catch (error) {
     if ((error as { status?: number }).status === 404) return undefined;
     throw error;
-  }
-}
-
-export async function updateRepositoryFile(
-  octokit: Octokit,
-  target: RepositoryTarget,
-  path: string,
-  branch: string,
-  content: Buffer,
-  message: string,
-  sha?: string,
-): Promise<void> {
-  try {
-    await octokit.rest.repos.createOrUpdateFileContents({
-      ...target,
-      path,
-      branch,
-      message,
-      content: content.toString("base64"),
-      ...(sha ? { sha } : {}),
-    });
-  } catch (error) {
-    const existing = await getRepositoryFile(octokit, target, path, branch);
-    if (!existing?.content.equals(content)) throw error;
   }
 }
 
@@ -321,6 +476,20 @@ export async function updatePullRequest(
       pull_number: number,
       title,
       body,
+    }),
+  );
+}
+
+export async function closePullRequest(
+  octokit: Octokit,
+  target: RepositoryTarget,
+  number: number,
+): Promise<void> {
+  await retry(() =>
+    octokit.rest.pulls.update({
+      ...target,
+      pull_number: number,
+      state: "closed",
     }),
   );
 }

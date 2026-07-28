@@ -22,10 +22,15 @@ describe("action metadata", () => {
     assert.match(metadata, /age-identities:/);
     assert.match(metadata, /imports-path:/);
     assert.match(metadata, /default: \.\/imports\.generated\.tf/);
+    assert.match(metadata, /terraform-root:/);
     assert.match(metadata, /create-pr:/);
     assert.match(metadata, /pr-base:/);
     assert.match(metadata, /pr-branch:/);
     assert.match(metadata, /import-pr-url:/);
+    assert.match(metadata, /import-candidate-count:/);
+    assert.match(metadata, /import-skipped-count:/);
+    assert.match(metadata, /import-collision-count:/);
+    assert.match(metadata, /import-pr-action:/);
     assert.match(metadata, /state-path:[\s\S]*required: false/);
   });
 });
