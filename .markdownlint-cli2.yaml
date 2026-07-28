@@ -8,4 +8,5 @@ config:
     style: aligned
 
 ignores:
+  - CHANGELOG.md
   - node_modules
