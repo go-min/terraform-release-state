@@ -20,6 +20,9 @@ writers as untrusted.
 | Partial replacement or backup corruption | Paired backups, compensation, orphan cleanup, metadata-first retention |
 | Over-broad reset                         | Exact confirmation, namespace audit, post-delete verification          |
 | Ambiguous API mutation                   | Reconcile expected remote content before accepting success             |
+| Import branch overwrite or race          | Full tree diff, generated-path allowlist, expected head, non-force ref |
+| Duplicate Terraform import target        | Structural HCL scan and explicit collision suppression                 |
+| Import path symlink or realpath escape   | Lexical plus realpath containment; PR mode avoids local import reads   |
 | Dependency compromise                    | Lockfile, pinned actions, dependency review, CodeQL, Dependabot        |
 
 Age encryption uses native X25519 recipients. Identities remain masked and in
@@ -28,6 +31,11 @@ memory; plaintext state is not written to outputs, logs, artifacts, or caches.
 Import proposals are read-only unless explicit PR mode is enabled. PR mode
 writes only the configured imports file, never Terraform state. Generated
 import IDs can be sensitive, so protect the target repository and review the PR.
+The scan excludes the generated output and Terraform/tool cache directories;
+malformed import blocks and symbolic links in the scanned tree fail closed.
+The configured root cannot be a symlink or traverse symlink components. Local
+`imports-path` content is read only in diff-only mode after regular-file,
+non-symlink, and realpath containment checks; PR mode uses the remote base.
 
 ## Residual risks
 

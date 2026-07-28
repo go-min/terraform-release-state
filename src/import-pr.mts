@@ -1,16 +1,21 @@
+import { relative } from "node:path";
 import { core, fail } from "./action-core.mjs";
 import {
+  closePullRequest,
   createBranch,
   createPullRequest,
   findOpenPullRequest,
   getRefSha,
+  getOptionalRefSha,
   getRepositoryFile,
-  updateRepositoryFile,
+  inspectBranchDiff,
+  rebuildBranchFromBase,
   updatePullRequest,
 } from "./github-api.mjs";
 import type { StateManagerContext } from "./types.mjs";
 
 type ImportPullRequestResult = {
+  action: "closed" | "created" | "unchanged" | "updated";
   baseContent: Buffer;
   url?: string;
 };
@@ -20,10 +25,14 @@ function pullRequestBody(
   path: string,
   candidateCount: number,
   skippedCount: number,
+  collisionCount: number,
 ): string {
   const { config } = context;
   const stateRepository = `${config.target.owner}/${config.target.repo}`;
   const targetRepository = `${config.prTarget.owner}/${config.prTarget.repo}`;
+  const terraformRoot =
+    relative(config.workspace, config.terraformRoot).replaceAll("\\", "/") ||
+    ".";
   return `## Terraform import proposal
 
 > [!IMPORTANT]
@@ -36,6 +45,7 @@ function pullRequestBody(
 | Generated file | \`${path}\` |
 | Import candidates | **${candidateCount}** |
 | Skipped resources | **${skippedCount}** |
+| Existing-target collisions | **${collisionCount}** |
 | State repository | \`${stateRepository}\` |
 | Target repository | \`${targetRepository}\` |
 | State release | \`${config.tag}\` |
@@ -51,6 +61,7 @@ function pullRequestBody(
 ### Safety boundary
 
 - Only \`${path}\` is changed by this PR.
+- Existing import targets found elsewhere under \`${terraformRoot}\` are not duplicated.
 - Terraform is not run and infrastructure is not modified by the import proposal.
 - Terraform state, credentials, and private keys are not committed or returned as outputs.
 - Skipped resources are not guessed or silently converted into import blocks.
@@ -64,52 +75,124 @@ export async function prepareImportPullRequest(
   generated: Buffer,
   candidateCount: number,
   skippedCount: number,
+  collisionCount: number,
 ): Promise<ImportPullRequestResult> {
   const { octokit, config } = context;
+  const baseSha = await getRefSha(octokit, config.prTarget, config.prBase);
   const baseFile = await getRepositoryFile(
     octokit,
     config.prTarget,
     path,
-    config.prBase,
+    baseSha,
   );
   const baseContent = baseFile?.content || Buffer.alloc(0);
-  if (baseContent.equals(generated)) return { baseContent };
-
   const existingPr = await findOpenPullRequest(
     octokit,
     config.prTarget,
     config.prBranch,
     config.prBase,
   );
-  const baseSha = await getRefSha(octokit, config.prTarget, config.prBase);
-  await createBranch(octokit, config.prTarget, config.prBranch, baseSha);
-  const branchFile = await getRepositoryFile(
+  let branchSha = await getOptionalRefSha(
     octokit,
     config.prTarget,
-    path,
     config.prBranch,
   );
-  if (branchFile?.content.equals(generated)) {
-    // The branch already contains the requested file; continue to create or
-    // refresh the PR metadata below.
-  } else {
-    if (branchFile && !existingPr && !branchFile.content.equals(baseContent)) {
-      fail(
-        `PR branch ${config.prBranch} contains changes outside the generated imports file; refusing to overwrite it.`,
-      );
-    }
-    await updateRepositoryFile(
+  let baseIsAncestor = false;
+  if (branchSha) {
+    const comparison = await inspectBranchDiff(
       octokit,
       config.prTarget,
-      path,
-      config.prBranch,
-      generated,
-      "Update generated Terraform import blocks",
-      branchFile?.sha,
+      baseSha,
+      branchSha,
+    );
+    baseIsAncestor = comparison.baseIsAncestor;
+    const unrelatedPaths = comparison.changedPaths.filter(
+      (changedPath) => changedPath !== path,
+    );
+    if (unrelatedPaths.length > 0) {
+      const shown = unrelatedPaths.slice(0, 20).join(", ");
+      const remainder =
+        unrelatedPaths.length > 20
+          ? ` (and ${unrelatedPaths.length - 20} more)`
+          : "";
+      fail(
+        `PR branch ${config.prBranch} at ${branchSha} changes unrelated path(s) against ${config.prBase} at ${baseSha}: ${shown}${remainder}. Only ${path} may be changed; refusing to overwrite the branch.`,
+      );
+    }
+  } else if (existingPr) {
+    fail(
+      `Open import PR ${existingPr.html_url} references missing branch ${config.prBranch}; refusing to recreate it implicitly.`,
     );
   }
 
-  const body = pullRequestBody(context, path, candidateCount, skippedCount);
+  if (baseContent.equals(generated)) {
+    if (!existingPr) return { action: "unchanged", baseContent };
+    const currentBranchSha = await getRefSha(
+      octokit,
+      config.prTarget,
+      config.prBranch,
+    );
+    if (currentBranchSha !== branchSha) {
+      fail(
+        `PR branch ${config.prBranch} changed from expected SHA ${branchSha} to ${currentBranchSha} before obsolete PR cleanup; refusing to close ${existingPr.html_url}.`,
+      );
+    }
+    await closePullRequest(octokit, config.prTarget, existingPr.number);
+    core.info(
+      `Import proposals: closed obsolete pull request ${existingPr.html_url}; branch ${config.prBranch} was retained because GitHub ref deletion has no expected-SHA guard.`,
+    );
+    return {
+      action: "closed",
+      baseContent,
+      url: existingPr.html_url,
+    };
+  }
+
+  if (!branchSha) {
+    branchSha = await createBranch(
+      octokit,
+      config.prTarget,
+      config.prBranch,
+      baseSha,
+    );
+    baseIsAncestor = branchSha === baseSha;
+    if (!baseIsAncestor) {
+      const comparison = await inspectBranchDiff(
+        octokit,
+        config.prTarget,
+        baseSha,
+        branchSha,
+      );
+      baseIsAncestor = comparison.baseIsAncestor;
+      const unrelatedPaths = comparison.changedPaths.filter(
+        (changedPath) => changedPath !== path,
+      );
+      if (unrelatedPaths.length > 0) {
+        fail(
+          `PR branch ${config.prBranch} appeared concurrently at ${branchSha} with unrelated changes (${unrelatedPaths.join(", ")}); refusing to overwrite it.`,
+        );
+      }
+    }
+  }
+  await rebuildBranchFromBase(
+    octokit,
+    config.prTarget,
+    config.prBranch,
+    branchSha,
+    baseSha,
+    baseIsAncestor,
+    path,
+    generated,
+    "Update generated Terraform import blocks",
+  );
+
+  const body = pullRequestBody(
+    context,
+    path,
+    candidateCount,
+    skippedCount,
+    collisionCount,
+  );
   const pullRequest =
     existingPr ||
     (await createPullRequest(
@@ -130,5 +213,9 @@ export async function prepareImportPullRequest(
     );
   }
   core.info(`Import proposals: pull request ${pullRequest.html_url}`);
-  return { baseContent, url: pullRequest.html_url };
+  return {
+    action: existingPr ? "updated" : "created",
+    baseContent,
+    url: pullRequest.html_url,
+  };
 }

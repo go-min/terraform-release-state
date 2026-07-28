@@ -1,8 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { core, fail } from "./action-core.mjs";
 import { prepareImportPullRequest } from "./import-pr.mjs";
 import { readStoredState } from "./state-manager.mjs";
+import {
+  canonicalImportTarget,
+  existingImportTargets,
+  readLocalImportsFile,
+} from "./terraform-config.mjs";
 import type { StateManagerContext } from "./types.mjs";
 
 type ImportCandidate = { address: string; id: string };
@@ -214,6 +218,14 @@ function diffLines(current: string, generated: string, path: string): string {
   return rows.join("\n");
 }
 
+export function localImportsDiffBase(
+  workspace: string,
+  importsPath: string,
+  createPr: boolean,
+): string {
+  return createPr ? "" : readLocalImportsFile(workspace, importsPath);
+}
+
 export async function generateImports(
   context: StateManagerContext,
 ): Promise<void> {
@@ -226,27 +238,58 @@ export async function generateImports(
     fail("Stored state is not valid JSON Terraform state.");
   }
   const { candidates, skipped } = candidatesFromState(state);
-  const generated = renderImports(candidates);
   const outputPath = config.importsPath;
+  const declaredTargets = existingImportTargets(
+    config.workspace,
+    config.terraformRoot,
+    outputPath,
+  );
+  const collisions: SkippedResource[] = [];
+  const proposedCandidates = candidates.filter((candidate) => {
+    const target = declaredTargets.get(
+      canonicalImportTarget(candidate.address),
+    );
+    if (!target) return true;
+    collisions.push({
+      address: candidate.address,
+      reason: `target already declared at ${target.locations.join(", ")}`,
+    });
+    return false;
+  });
+  const allSkipped = [...skipped, ...collisions];
+  const generated = renderImports(proposedCandidates);
   const relativePath = relative(config.workspace, outputPath);
   const repositoryPath = relativePath.replaceAll("\\", "/");
-  let current = existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "";
+  let current = localImportsDiffBase(
+    config.workspace,
+    outputPath,
+    config.createPr,
+  );
   let pullRequestUrl: string | undefined;
+  let pullRequestAction = "disabled";
   if (config.createPr) {
     const result = await prepareImportPullRequest(
       context,
       repositoryPath,
       Buffer.from(generated),
-      candidates.length,
-      skipped.length,
+      proposedCandidates.length,
+      allSkipped.length,
+      collisions.length,
     );
     current = result.baseContent.toString("utf8");
     pullRequestUrl = result.url;
+    pullRequestAction = result.action;
   }
+  core.setOutput("operation", "import");
+  core.setOutput("import-candidate-count", proposedCandidates.length);
+  core.setOutput("import-skipped-count", allSkipped.length);
+  core.setOutput("import-collision-count", collisions.length);
+  core.setOutput("import-pr-action", pullRequestAction);
+  if (pullRequestUrl) core.setOutput("import-pr-url", pullRequestUrl);
   core.info(
-    `Import proposals: ${candidates.length} candidate(s), ${skipped.length} skipped; output ${relativePath}`,
+    `Import proposals: ${proposedCandidates.length} candidate(s), ${allSkipped.length} skipped (${collisions.length} existing-target collision(s)); output ${relativePath}`,
   );
-  for (const item of skipped) {
+  for (const item of allSkipped) {
     core.info(`Import proposals: skipped ${item.address} (${item.reason}).`);
   }
   if (current === generated) {
@@ -259,5 +302,4 @@ export async function generateImports(
       : "Import proposals: proposed diff (file was not modified):",
   );
   core.info(diffLines(current, generated, relativePath));
-  if (pullRequestUrl) core.setOutput("import-pr-url", pullRequestUrl);
 }

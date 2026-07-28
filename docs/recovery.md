@@ -6,14 +6,23 @@ not recreate infrastructure, infer imports, or run Terraform.
 
 ## Failure responses
 
-| Failure                            | Response                                                                |
-| ---------------------------------- | ----------------------------------------------------------------------- |
-| Release or current asset missing   | Investigate access/deletion; bootstrap only after approval              |
-| Integrity or metadata failure      | Stop Terraform; inspect the latest complete backup and key              |
-| Remote marker changed              | Do not overwrite; restore again after resolving the competing writer    |
-| Save replacement and recovery fail | Preserve local state; inspect current and backup assets before mutation |
-| Retention fails after save         | Treat the new current state as authoritative; retry cleanup separately  |
-| Reset partially fails              | Retry reset with the same target; deletions are idempotent              |
+| Failure                             | Response                                                                |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| Release or current asset missing    | Investigate access/deletion; bootstrap only after approval              |
+| Integrity or metadata failure       | Stop Terraform; inspect the latest complete backup and key              |
+| Remote marker changed               | Do not overwrite; restore again after resolving the competing writer    |
+| Save replacement and recovery fail  | Preserve local state; inspect current and backup assets before mutation |
+| Retention fails after save          | Treat the new current state as authoritative; retry cleanup separately  |
+| Reset partially fails               | Retry reset with the same target; deletions are idempotent              |
+| Import branch has unrelated changes | Preserve it; move the changes or choose a new reviewed `pr-branch`      |
+| Obsolete import PR is closed        | Branch is retained; delete it only after manual review                  |
+| Import path fails containment       | Replace symlinks with regular workspace paths; do not bypass the check  |
+
+Import PR refresh never force-updates a branch. If the expected branch head
+changes during refresh, rerun after inspecting the new diff. When generated
+content already exists on base, an action-only open PR is closed but its branch
+is retained because GitHub does not offer an expected-SHA condition for ref
+deletion.
 
 Never restore an older backup over a newer local state from a partially
 successful `terraform apply`. Save the newer local state first when its marker

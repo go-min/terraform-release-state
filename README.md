@@ -147,6 +147,7 @@ steps:
     with:
       operation: import
       github-token: ${{ github.token }}
+      terraform-root: terraform
       imports-path: terraform/imports.generated.tf
       create-pr: "true"
       pr-base: main
@@ -154,7 +155,31 @@ steps:
 
 The default PR branch is
 `terraform-release-state/<imports-filename>`. The proposal workflow changes
-only the configured imports file and refuses to overwrite unrelated branch changes.
+only the configured imports file and refuses to overwrite unrelated branch
+changes. It inspects the complete branch change set against the merge base, not
+just the generated file contents. A stale action-only branch is rebuilt from the
+latest base tree with both the observed branch head and current base as parents,
+then advanced without force after an expected-head check. This keeps the base as
+an ancestor for a correct PR diff while failing closed on concurrent updates.
+
+Before rendering, the action scans `.tf` files recursively below
+`terraform-root` (default `.`), excluding `imports-path`, `.git`, `.terraform`,
+and `node_modules`. A small structural HCL lexer/parser reads top-level
+`import` blocks and their `to` expressions; matching targets are suppressed
+rather than duplicated. Malformed import blocks, truncated repository trees,
+symbolic links in the scanned configuration, and unrelated automation-branch
+changes stop the operation instead of being guessed around.
+
+`terraform-root` must be a real directory whose lexical and resolved paths stay
+inside `GITHUB_WORKSPACE`; symlink roots and symlink path components are
+rejected. PR mode never reads the workspace copy of `imports-path`: its diff is
+based on the remote base branch. Diff-only mode reads `imports-path` only when
+it exists as a regular, non-symlink file with the same workspace containment.
+
+When generated content already matches the base, PR mode returns `unchanged`.
+If an open PR on the configured branch changes only the generated file, it is
+closed as obsolete and returns `closed`. Its branch is retained because the
+GitHub ref deletion API has no expected-SHA guard.
 Review every target and the resulting Terraform plan before merging.
 
 Import proposals use explicit provider-specific normalization, not a general
@@ -221,6 +246,7 @@ out of logs, outputs, artifacts, and caches.
 | `encryption`                         | `none`                   | `none` or `age`                         |
 | `age-recipients` / `age-identities`  | —                        | Encryption key material                 |
 | `imports-path`                       | `./imports.generated.tf` | Import proposal output path             |
+| `terraform-root`                     | `.`                      | Recursive `.tf` duplicate-target scan   |
 | `create-pr`                          | `false`                  | Enable import proposal PR mode          |
 | `pr-base` / `pr-branch` / `pr-title` | derived                  | Import proposal PR settings             |
 
@@ -232,6 +258,13 @@ context values and are recorded in backup metadata.
 Outputs contain only identifiers, checksums, counts, and the opaque remote
 marker. The action never returns Terraform state, credentials, keys, or other
 secret content. See `action.yml` for the complete output list.
+
+Import operations additionally return `import-candidate-count` (rendered
+blocks after collision suppression), `import-skipped-count` (all excluded
+resources, including collisions), `import-collision-count` (the collision
+subset), and `import-pr-action` (`disabled`, `created`, `updated`, `unchanged`,
+or `closed`). `import-pr-url` remains available when a PR was created, updated,
+or closed.
 
 ## Limitations and release status
 
