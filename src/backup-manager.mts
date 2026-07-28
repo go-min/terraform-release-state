@@ -1,109 +1,285 @@
 import {
-  backupNameFromMetadata,
+  backupBundleNames,
+  bundleAssets,
   createBackupName,
-  isBackupAsset,
+  manifestName,
   metadataName,
+  signatureName,
+  type BundleAssets,
 } from "./asset-names.mjs";
+import { encryptState } from "./encryption.mjs";
+import { failWithCode } from "./errors.mjs";
 import {
   deleteAsset,
   downloadAsset,
-  findAsset,
   listAssets,
   uploadAsset,
 } from "./github-api.mjs";
 import { sha256 } from "./integrity.mjs";
+import { marker } from "./marker.mjs";
+import { ageRecipientsFingerprint } from "./manifest.mjs";
+import {
+  createBundleData,
+  createBundleDataFromManifest,
+  loadStateBundle,
+  type BundleData,
+  type LoadedStateBundle,
+} from "./state-bundle.mjs";
+import { createBackupMetadata } from "./state-metadata.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
+
+function actionVersion(): string {
+  return process.env.GITHUB_ACTION_REF || "unknown";
+}
+
+async function backupBundleData(
+  context: StateManagerContext,
+  current: Asset,
+  previous: LoadedStateBundle,
+  name: string,
+  createdAt: string,
+): Promise<BundleData> {
+  const { config } = context;
+  if (previous.manifest) {
+    const metadata = createBackupMetadata({
+      stored: previous.stored,
+      currentAsset: current.name,
+      encryption: config.encryption.mode,
+      sourceCommit: config.sourceCommit,
+      workflowRunId: config.workflowRunId,
+      actionVersion: actionVersion(),
+      createdAt,
+    });
+    return createBundleDataFromManifest(
+      {
+        ...previous.manifest,
+        object: { role: "backup", name },
+        parent: {
+          remote_state_marker: marker(current),
+          stored_sha256: previous.manifest.content.stored.sha256,
+        },
+        provenance: {
+          source_commit: config.sourceCommit || "unknown",
+          workflow_run_id: config.workflowRunId || "unknown",
+          action_version: actionVersion(),
+          created_at: createdAt,
+        },
+      },
+      previous.stored,
+      context,
+      metadata,
+    );
+  }
+  if (!previous.plaintext) {
+    failWithCode(
+      "TRS_LEGACY_MIGRATION_IDENTITY_REQUIRED",
+      "Legacy state must be decrypted before a complete backup manifest can be created.",
+    );
+  }
+  // Legacy encrypted metadata cannot identify the original recipient set.
+  // Re-encrypt the verified plaintext for the configured recipients so the
+  // migrated backup's key fingerprint describes its actual stored bytes.
+  const stored =
+    config.encryption.mode === "age"
+      ? await encryptState(config.encryption, previous.plaintext)
+      : previous.stored;
+  const metadata = createBackupMetadata({
+    stored,
+    currentAsset: current.name,
+    encryption: config.encryption.mode,
+    sourceCommit: config.sourceCommit,
+    workflowRunId: config.workflowRunId,
+    actionVersion: actionVersion(),
+    createdAt,
+  });
+  return createBundleData(
+    {
+      role: "backup",
+      name,
+      stored,
+      plaintext: previous.plaintext,
+      encryptionMode: config.encryption.mode,
+      encryptionKeyFingerprint:
+        config.encryption.mode === "age"
+          ? // A legacy object has no recipient fingerprint. The save recipients
+            // define the non-secret key set recorded during migration.
+            ageRecipientsFingerprint(config.encryption.recipients)
+          : null,
+      parentMarker: marker(current),
+      parentStoredSha256: sha256(previous.stored),
+      sourceCommit: config.sourceCommit,
+      workflowRunId: config.workflowRunId,
+      actionVersion: actionVersion(),
+      createdAt,
+    },
+    context,
+    metadata,
+  );
+}
+
+async function uploadBundle(
+  context: StateManagerContext,
+  release: Release,
+  name: string,
+  data: BundleData,
+): Promise<BundleAssets> {
+  const { octokit, config } = context;
+  const uploaded: BundleAssets = {};
+  uploaded.state = await uploadAsset(
+    octokit,
+    config.target,
+    release.id,
+    name,
+    data.state,
+  );
+  if (data.metadata) {
+    uploaded.metadata = await uploadAsset(
+      octokit,
+      config.target,
+      release.id,
+      metadataName(name),
+      data.metadata,
+      "application/json",
+    );
+  }
+  if (data.signature) {
+    uploaded.signature = await uploadAsset(
+      octokit,
+      config.target,
+      release.id,
+      signatureName(name),
+      data.signature,
+      "application/json",
+    );
+  }
+  // The manifest is uploaded last and acts as the flat-bundle completion
+  // signal. Generation pointers and atomic promotion remain deferred to v0.5.
+  uploaded.manifest = await uploadAsset(
+    octokit,
+    config.target,
+    release.id,
+    manifestName(name),
+    data.manifest,
+    "application/json",
+  );
+  return uploaded;
+}
+
+async function deleteBundle(
+  context: StateManagerContext,
+  assets: BundleAssets,
+): Promise<void> {
+  for (const asset of [
+    assets.signature,
+    assets.manifest,
+    assets.metadata,
+    assets.state,
+  ]) {
+    if (asset)
+      await deleteAsset(context.octokit, context.config.target, asset.id);
+  }
+}
+
+async function assertUploadedBytes(
+  context: StateManagerContext,
+  uploaded: BundleAssets,
+  expected: BundleData,
+): Promise<void> {
+  const entries: Array<[Asset | undefined, Buffer | undefined, string]> = [
+    [uploaded.state, expected.state, "state"],
+    [uploaded.metadata, expected.metadata, "metadata"],
+    [uploaded.signature, expected.signature, "signature"],
+    [uploaded.manifest, expected.manifest, "manifest"],
+  ];
+  for (const [asset, data, kind] of entries) {
+    if (!asset || !data) {
+      if (asset || data) {
+        failWithCode(
+          "TRS_OBJECT_SET_INCOMPLETE",
+          `Uploaded backup ${kind} object is incomplete.`,
+        );
+      }
+      continue;
+    }
+    const downloaded = await downloadAsset(
+      context.octokit,
+      context.config.target,
+      asset,
+    );
+    if (sha256(downloaded) !== sha256(data)) {
+      failWithCode(
+        kind === "state"
+          ? "TRS_STORED_DIGEST_MISMATCH"
+          : "TRS_MANIFEST_INVALID",
+        `Uploaded backup ${kind} asset ${asset.name} failed checksum verification.`,
+      );
+    }
+  }
+}
 
 export async function createBackup(
   context: StateManagerContext,
   release: Release,
   current: Asset,
-  previous: Buffer,
+  previous: LoadedStateBundle,
 ): Promise<string> {
-  const { octokit, config } = context;
-  const name = createBackupName(config.assetName, config.workflowRunId);
-  const metadata = Buffer.from(
-    `${JSON.stringify(
-      {
-        timestamp_utc: new Date().toISOString(),
-        source_commit:
-          config.sourceCommit || process.env.GITHUB_SHA || "unknown",
-        workflow_run_id:
-          config.workflowRunId || process.env.GITHUB_RUN_ID || "unknown",
-        action_version: process.env.GITHUB_ACTION_REF || "unknown",
-        current_asset: current.name,
-        encryption: config.encryption.mode,
-        sha256: sha256(previous),
-      },
-      null,
-      2,
-    )}\n`,
+  const name = createBackupName(
+    context.config.assetName,
+    context.config.workflowRunId,
   );
-  const backup = await uploadAsset(
-    octokit,
-    config.target,
-    release.id,
-    name,
+  const createdAt = new Date().toISOString();
+  const data = await backupBundleData(
+    context,
+    current,
     previous,
+    name,
+    createdAt,
   );
-  let uploadedMetadata: Asset | undefined;
+  let uploaded: BundleAssets = {};
   try {
-    uploadedMetadata = await uploadAsset(
-      octokit,
-      config.target,
+    uploaded = await uploadBundle(context, release, name, data);
+    await assertUploadedBytes(context, uploaded, data);
+    const assets = await listAssets(
+      context.octokit,
+      context.config.target,
       release.id,
-      metadataName(name),
-      metadata,
-      "application/json",
     );
-    const [verifiedBackup, verifiedMetadata] = await Promise.all([
-      downloadAsset(octokit, config.target, backup),
-      downloadAsset(octokit, config.target, uploadedMetadata),
-    ]);
-    if (sha256(verifiedBackup) !== sha256(previous)) {
-      throw new Error(
-        `Backup state asset ${name} failed checksum verification.`,
-      );
+    const listed = bundleAssets(assets, name);
+    for (const kind of [
+      "state",
+      "metadata",
+      "manifest",
+      "signature",
+    ] as const) {
+      if (uploaded[kind]?.id !== listed[kind]?.id) {
+        if (uploaded[kind] || listed[kind]) {
+          failWithCode(
+            "TRS_REMOTE_CHANGED",
+            `Backup bundle ${name} changed during upload verification.`,
+          );
+        }
+      }
     }
-    if (sha256(verifiedMetadata) !== sha256(metadata)) {
-      throw new Error(
-        `Backup metadata asset ${metadataName(name)} failed checksum verification.`,
-      );
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(verifiedMetadata.toString("utf8"));
-    } catch {
-      throw new Error(
-        `Backup metadata asset ${metadataName(name)} is invalid JSON.`,
-      );
-    }
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      !("sha256" in parsed) ||
-      parsed.sha256 !== sha256(verifiedBackup) ||
-      !("current_asset" in parsed) ||
-      parsed.current_asset !== current.name ||
-      !("encryption" in parsed) ||
-      parsed.encryption !== config.encryption.mode
-    ) {
-      throw new Error(
-        `Backup metadata asset ${metadataName(name)} is not bound to the uploaded backup.`,
-      );
-    }
+    await loadStateBundle(context, assets, name, "backup", {
+      plaintext: "if-available",
+    });
   } catch (error) {
     try {
-      const assets = await listAssets(octokit, config.target, release.id);
-      const listedMetadata = findAsset(assets, metadataName(name));
-      const metadataToDelete = listedMetadata || uploadedMetadata;
-      if (metadataToDelete) {
-        await deleteAsset(octokit, config.target, metadataToDelete.id);
-      }
-      await deleteAsset(octokit, config.target, backup.id);
+      const assets = await listAssets(
+        context.octokit,
+        context.config.target,
+        release.id,
+      );
+      const listed = bundleAssets(assets, name);
+      await deleteBundle(context, {
+        state: listed.state || uploaded.state,
+        metadata: listed.metadata || uploaded.metadata,
+        manifest: listed.manifest || uploaded.manifest,
+        signature: listed.signature || uploaded.signature,
+      });
     } catch (cleanupError) {
       throw new Error(
-        `Backup pair creation failed and compensating cleanup could not complete: ${errorMessage(cleanupError)}`,
+        `Backup bundle creation failed and compensating cleanup could not complete: ${errorMessage(cleanupError)}`,
         { cause: error },
       );
     }
@@ -116,49 +292,32 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown cleanup error";
 }
 
+function completeBundle(bundle: BundleAssets): boolean {
+  if (!bundle.state || !bundle.metadata) return false;
+  if (bundle.signature && !bundle.manifest) return false;
+  return true;
+}
+
 export async function retainBackups(
   context: StateManagerContext,
   assets: Asset[],
 ): Promise<number> {
-  const { octokit, config } = context;
-  const uploaded = assets.filter((asset) => asset.state === "uploaded");
-  const backups = uploaded
-    .filter((asset) => isBackupAsset(asset.name, config.assetName))
-    .sort((left, right) => {
-      const createdDifference =
-        Date.parse(right.created_at) - Date.parse(left.created_at);
-      return createdDifference || right.id - left.id;
-    });
-
-  const backupNames = new Set(backups.map((asset) => asset.name));
-  const metadataByBackup = new Map<string, Asset>();
-  for (const asset of uploaded) {
-    const backupName = backupNameFromMetadata(asset.name, config.assetName);
-    if (!backupName) continue;
-    if (metadataByBackup.has(backupName)) {
-      throw new Error(
-        `Release contains duplicate metadata assets for ${backupName}.`,
-      );
-    }
-    metadataByBackup.set(backupName, asset);
+  const names = backupBundleNames(assets, context.config.assetName);
+  const complete: BundleAssets[] = [];
+  for (const name of names) {
+    const bundle = bundleAssets(assets, name);
+    if (completeBundle(bundle)) complete.push(bundle);
+    else await deleteBundle(context, bundle);
   }
-
-  for (const [backupName, metadata] of metadataByBackup) {
-    if (!backupNames.has(backupName)) {
-      await deleteAsset(octokit, config.target, metadata.id);
-    }
+  complete.sort((left, right) => {
+    const leftState = left.state as Asset;
+    const rightState = right.state as Asset;
+    const createdDifference =
+      Date.parse(rightState.created_at) - Date.parse(leftState.created_at);
+    return createdDifference || rightState.id - leftState.id;
+  });
+  for (const bundle of complete.slice(context.config.backupRetention)) {
+    await deleteBundle(context, bundle);
   }
-
-  const completeBackups: Asset[] = [];
-  for (const backup of backups) {
-    if (metadataByBackup.has(backup.name)) completeBackups.push(backup);
-    else await deleteAsset(octokit, config.target, backup.id);
-  }
-
-  for (const backup of completeBackups.slice(config.backupRetention)) {
-    const metadata = metadataByBackup.get(backup.name);
-    if (metadata) await deleteAsset(octokit, config.target, metadata.id);
-    await deleteAsset(octokit, config.target, backup.id);
-  }
-  return Math.min(completeBackups.length, config.backupRetention);
+  return Math.min(complete.length, context.config.backupRetention);
 }

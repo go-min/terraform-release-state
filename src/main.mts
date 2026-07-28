@@ -4,6 +4,7 @@ import { readConfig } from "./config.mjs";
 import { restore, save } from "./state-manager.mjs";
 import { reset } from "./reset.mjs";
 import { generateImports } from "./imports.mjs";
+import { displayError, normalizeActionError } from "./errors.mjs";
 
 async function run(): Promise<void> {
   const config = readConfig();
@@ -26,8 +27,8 @@ async function run(): Promise<void> {
   await save(context);
 }
 
-run().catch((error) =>
-  core.setFailed(
-    error instanceof Error ? error.message : "Terraform Release State failed.",
-  ),
-);
+run().catch((error) => {
+  const actionError = normalizeActionError(error);
+  core.setOutput("error-code", actionError.code);
+  core.setFailed(displayError(actionError));
+});

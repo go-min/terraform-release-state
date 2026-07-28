@@ -45,7 +45,7 @@ steps:
 
   - name: Restore Terraform state
     id: state-restore
-    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
+    uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
     with:
       operation: restore
       github-token: ${{ github.token }}
@@ -56,7 +56,7 @@ steps:
 
   - name: Save Terraform state
     if: ${{ always() && steps.state-restore.outcome == 'success' }}
-    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
+    uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
     with:
       operation: save
       github-token: ${{ github.token }}
@@ -102,11 +102,21 @@ import resources, or create infrastructure.
 
 For an existing state, `save` requires the opaque marker returned by
 `restore`. Before replacing the current asset it verifies that the remote state
-has not changed, creates a backup pair, downloads and cryptographically verifies
-both newly uploaded backup objects, uploads the new state, downloads it for
-verification, and applies retention. A concurrent or manual change fails the
-save instead of using last-write-wins. The existing current state is not deleted
-until its newly uploaded backup pair has passed verification.
+has not changed, creates a complete backup bundle, downloads and
+cryptographically verifies every newly uploaded object, uploads the new current
+bundle, downloads it for verification, and applies retention. A concurrent or
+manual change fails the save instead of using last-write-wins. The existing
+current state is not deleted until its new backup bundle has passed
+verification.
+
+New current and backup objects use flat Release assets: the state object, a
+canonical `.manifest.json`, optional `.manifest.sig.json`, and compatibility
+`.metadata.json` where v0.3 readers require it. The manifest binds stored and
+plaintext SHA-256 digests and sizes, Terraform version, serial, lineage,
+encryption metadata, parent marker/digest, and non-secret provenance. Terraform
+lineage is an infrastructure correlation identifier, not a credential or state
+value. A present manifest is authoritative: malformed, unsupported, or corrupt
+manifests fail closed and never fall back to legacy metadata.
 
 The verified replacement is the commit boundary. If later retention or orphan
 cleanup fails, the action still fails, but `state-write-committed` is `true`,
@@ -137,7 +147,7 @@ Default mode prints a diff only:
 
 ```yaml
 - name: Review Terraform imports
-  uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
+  uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
   with:
     operation: import
     github-token: ${{ github.token }}
@@ -154,7 +164,7 @@ permissions:
 
 steps:
   - name: Propose Terraform imports
-    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
+    uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
     with:
       operation: import
       github-token: ${{ github.token }}
@@ -222,9 +232,47 @@ age-recipients: ${{ vars.TF_STATE_AGE_RECIPIENTS }}
 ```
 
 Only native X25519 `age1...` recipients and `AGE-SECRET-KEY-1...` identities
-are supported. Passphrases, SSH keys, plugins, and automatic plain/encrypted
-migrations are not supported. Retain old identities until all backups
-encrypted for them are outside the retention window.
+are supported. Passphrases, SSH keys, plugins, and implicit changes between
+plain and encrypted storage are not supported. The first v0.4 save migrates a
+legacy object in the existing flat namespace. Legacy age migration requires
+both identities and recipients before any remote mutation; its backup is
+re-encrypted for the configured recipient set so the recorded fingerprint is
+accurate. Historical backups are not rewritten. Retain old identities until
+all backups encrypted for them are outside the retention window.
+
+The flat state and compatibility metadata remain readable by v0.3.1, but an
+older writer does not understand the authoritative v0.4 manifest companions.
+After the first v0.4 save, do not run a v0.3 writer against that Release: it can
+replace state bytes while leaving a stale manifest, which v0.4 correctly rejects
+instead of silently downgrading. Restore/import remain dual-read for unsigned
+legacy objects, and migration never relocates the namespace.
+
+## Manifest signatures
+
+Save can sign each new current and backup manifest with Ed25519. The private
+key format is an unencrypted PKCS#8 PEM supplied through
+`signing-private-key`. Verification keys are newline-delimited
+`ed25519:<base64url>` values containing exactly 32 raw public-key bytes.
+Multiple public keys support rotation.
+
+`signature-policy: allow-unsigned` is the backward-compatible default. It
+warns for unsigned legacy or v0.4 objects, but a signature that is present must
+always verify against a configured key. `signature-policy: require` fails
+closed on unsigned objects and requires a signing private key for save. During
+rotation, configure old and new verification keys, save with the new private
+key, then remove the old verification key after retained signed backups no
+longer need it.
+
+```yaml
+# save
+signature-policy: require
+signing-private-key: ${{ secrets.TF_STATE_ED25519_PRIVATE_KEY }}
+verification-public-keys: ${{ vars.TF_STATE_ED25519_PUBLIC_KEYS }}
+
+# restore/import
+signature-policy: require
+verification-public-keys: ${{ vars.TF_STATE_ED25519_PUBLIC_KEYS }}
+```
 
 ## Permissions and authentication
 
@@ -252,10 +300,13 @@ out of logs, outputs, artifacts, and caches.
 | `state-path`                         | —                        | Required for `restore` and `save`       |
 | `bootstrap`                          | `false`                  | Explicit missing-storage creation       |
 | `expected-remote-state-marker`       | —                        | Required by `save` for existing state   |
-| `backup-retention`                   | `20`                     | Complete backup pairs, `0`–`1000`       |
+| `backup-retention`                   | `20`                     | Complete backup bundles, `0`–`1000`     |
 | `confirmation`                       | —                        | Must be `RESET` for `reset`             |
 | `encryption`                         | `none`                   | `none` or `age`                         |
 | `age-recipients` / `age-identities`  | —                        | Encryption key material                 |
+| `signature-policy`                   | `allow-unsigned`         | `allow-unsigned` or `require`           |
+| `signing-private-key`                | —                        | Save-only PKCS#8 PEM Ed25519 key        |
+| `verification-public-keys`           | —                        | Newline-delimited rotation key set      |
 | `imports-path`                       | `./imports.generated.tf` | Import proposal output path             |
 | `terraform-root`                     | `.`                      | Recursive `.tf` duplicate-target scan   |
 | `create-pr`                          | `false`                  | Enable import proposal PR mode          |
@@ -276,6 +327,34 @@ differs from the plaintext checksum when age encryption is enabled.
 one; it is not silently redefined as either new checksum output. See `action.yml`
 for the complete output list.
 
+`storage-format`, `signature-status`, and the stored/plaintext verification
+outputs describe exactly which integrity checks ran. In particular,
+`plaintext-state-verification: not-performed` is distinct from `verified` for
+encrypted reads that intentionally do not receive identities. Legacy objects
+emit stable warning codes; failures emit a stable `TRS_*` `error-code` and the
+same code prefixes the human-readable error.
+
+Stable v0.4 failure codes are:
+
+| Code                                     | Meaning                                                         |
+| ---------------------------------------- | --------------------------------------------------------------- |
+| `TRS_CONFIG_INVALID`                     | Input, path, key format, or encryption-mode contract is invalid |
+| `TRS_OBJECT_NOT_FOUND`                   | Required Release or state object is absent                      |
+| `TRS_OBJECT_SET_INCOMPLETE`              | A flat bundle is missing or has conflicting companions          |
+| `TRS_MANIFEST_INVALID`                   | Manifest or uploaded companion bytes are invalid                |
+| `TRS_MANIFEST_UNSUPPORTED_VERSION`       | Manifest schema version is not supported                        |
+| `TRS_MANIFEST_OBJECT_MISMATCH`           | Manifest role/name does not match the selected object           |
+| `TRS_STORED_DIGEST_MISMATCH`             | Stored bytes differ from their recorded digest or size          |
+| `TRS_DECRYPTION_FAILED`                  | Identity is missing/wrong or ciphertext cannot be decrypted     |
+| `TRS_PLAINTEXT_DIGEST_MISMATCH`          | Decryption succeeded but plaintext digest or size differs       |
+| `TRS_SIGNATURE_REQUIRED`                 | Policy requires a signature or save signing key                 |
+| `TRS_SIGNATURE_INVALID`                  | Signature object or Ed25519 verification is invalid             |
+| `TRS_SIGNATURE_KEY_UNKNOWN`              | Signature fingerprint has no matching configured key            |
+| `TRS_VERIFICATION_KEY_REQUIRED`          | Verification key material is missing                            |
+| `TRS_LEGACY_MIGRATION_IDENTITY_REQUIRED` | Legacy age migration needs an identity before mutation          |
+| `TRS_REMOTE_CHANGED`                     | Optimistic consistency or bundle identity changed               |
+| `TRS_API_FAILURE` / `TRS_UNEXPECTED`     | GitHub API or uncategorized internal failure                    |
+
 Import operations additionally return `import-candidate-count` (rendered
 blocks after collision suppression), `import-skipped-count` (all excluded
 resources, including collisions), `import-collision-count` (the collision
@@ -291,7 +370,7 @@ or closed.
 - A lost age identity makes matching encrypted state unrecoverable.
 - A compromised runner can access plaintext state supplied to Terraform.
 - Marketplace publication is not enabled. The current immutable release pin is
-  `f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6` (`v0.3.0`).
+  `25c63506b7f9d288683dfff3c29a1e69f4fa4006` (`v0.3.1`).
 - For stronger supply-chain protection, pin the full immutable commit SHA from
   the release and keep the version in a comment.
 - Releases are prepared by a reviewed Release PR. After each `main` update,

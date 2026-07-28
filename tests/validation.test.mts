@@ -1,14 +1,16 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import {
+const {
   parseBoolean,
   parseRepository,
   parseRetention,
   resolveStatePath,
   validateGitRef,
   validateReleaseComponent,
-  // @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-} from "../src/validation.mts";
+} = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/validation.mjs"
+);
 const { validateResetConfirmation } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/reset-core.mjs"

@@ -3,6 +3,12 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
 const metadata = readFileSync("action.yml", "utf8");
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  scripts: { build: string };
+};
+const buildConfig = JSON.parse(readFileSync("tsconfig.build.json", "utf8")) as {
+  compilerOptions: { incremental: boolean };
+};
 const releasePleaseWorkflow = readFileSync(
   ".github/workflows/release-please.yml",
   "utf8",
@@ -45,6 +51,17 @@ describe("action metadata", () => {
     assert.match(metadata, /state-path:[\s\S]*required: false/);
     assert.match(metadata, /stored-state-sha256:/);
     assert.match(metadata, /plaintext-state-sha256:/);
+    assert.match(metadata, /signature-policy:/);
+    assert.match(metadata, /signing-private-key:/);
+    assert.match(metadata, /verification-public-keys:/);
+    assert.match(metadata, /storage-format:/);
+    assert.match(metadata, /manifest-schema-version:/);
+    assert.match(metadata, /signature-status:/);
+    assert.match(metadata, /signature-key-fingerprint:/);
+    assert.match(metadata, /stored-state-verification:/);
+    assert.match(metadata, /plaintext-state-verification:/);
+    assert.match(metadata, /warning-codes-json:/);
+    assert.match(metadata, /error-code:/);
     assert.match(metadata, /state-write-committed:/);
     assert.match(metadata, /state-phase:/);
     assert.match(metadata, /state-status:/);
@@ -52,6 +69,14 @@ describe("action metadata", () => {
 });
 
 describe("release lifecycle", () => {
+  it("rebuilds dist without stale ncc dependency cache", () => {
+    assert.match(
+      packageJson.scripts.build,
+      /rm -rf \.build.*XDG_CACHE_HOME="\$PWD\/\.build\/\.cache" ncc build .* --no-cache/,
+    );
+    assert.equal(buildConfig.compilerOptions.incremental, false);
+  });
+
   it("keeps Release Please lifecycle labeling enabled", () => {
     assert.doesNotMatch(releasePleaseWorkflow, /skip-labeling/);
   });

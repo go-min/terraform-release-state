@@ -10,6 +10,7 @@ import {
   validateReleaseComponent,
 } from "./validation.mjs";
 import { readEncryptionConfig } from "./encryption.mjs";
+import { readSigningConfig } from "./signing.mjs";
 import type { ActionConfig } from "./types.mjs";
 
 export function readConfig(): ActionConfig {
@@ -47,6 +48,14 @@ export function readConfig(): ActionConfig {
     core.getInput("encryption").toLowerCase(),
     core.getInput("age-recipients"),
     ageIdentities,
+  );
+  const signingPrivateKey = core.getInput("signing-private-key");
+  if (signingPrivateKey) core.setSecret(signingPrivateKey);
+  const signing = readSigningConfig(
+    operation,
+    core.getInput("signature-policy").toLowerCase(),
+    signingPrivateKey,
+    core.getInput("verification-public-keys"),
   );
   if (operation === "reset" && encryption.mode !== "none") {
     fail("reset does not accept encryption inputs.");
@@ -103,5 +112,6 @@ export function readConfig(): ActionConfig {
     prBranch,
     prTitle,
     encryption,
+    signing,
   };
 }

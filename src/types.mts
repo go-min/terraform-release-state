@@ -29,6 +29,14 @@ export type EncryptionConfig = {
   identities: string[];
 };
 
+export type SignaturePolicy = "allow-unsigned" | "require";
+
+export type SigningConfig = {
+  policy: SignaturePolicy;
+  privateKeyPem: string;
+  verificationKeys: string[];
+};
+
 export type ActionConfig = {
   operation: "restore" | "save" | "reset" | "import";
   token: string;
@@ -51,6 +59,7 @@ export type ActionConfig = {
   prBranch: string;
   prTitle: string;
   encryption: EncryptionConfig;
+  signing: SigningConfig;
 };
 
 export type StateManagerContext = {

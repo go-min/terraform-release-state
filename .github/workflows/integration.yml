@@ -100,15 +100,24 @@ jobs:
       - name: Simulate updated Terraform state
         run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
 
-      - name: Mutate remote state to simulate a concurrent writer
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Prepare concurrent remote state
         run: |
-          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate") | .id')
-          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
-          mkdir -p test-state/remote
-          printf '%s\n' '{"version":4,"terraform_version":"test","serial":99,"lineage":"integration"}' > test-state/remote/terraform.tfstate
-          gh release upload "$STATE_TEST_TAG" test-state/remote/terraform.tfstate --repo "$GITHUB_REPOSITORY"
+          cp "$STATE_TEST_PATH" "$RUNNER_TEMP/stale-local.tfstate"
+          printf '%s\n' '{"version":4,"terraform_version":"test","serial":99,"lineage":"integration"}' > "$STATE_TEST_PATH"
+
+      - name: Save a coherent concurrent writer bundle
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          state-repository: ${{ github.repository }}
+          release-tag: ${{ env.STATE_TEST_TAG }}
+          state-path: ${{ env.STATE_TEST_PATH }}
+          expected-remote-state-marker: ${{ steps.restore-current.outputs.remote-state-marker }}
+          backup-retention: "1"
+
+      - name: Restore stale local candidate
+        run: mv "$RUNNER_TEMP/stale-local.tfstate" "$STATE_TEST_PATH"
 
       - name: Assert remote consistency conflict
         env:
@@ -173,17 +182,20 @@ jobs:
           expected-remote-state-marker: ${{ steps.restore-retention.outputs.remote-state-marker }}
           backup-retention: "1"
 
-      - name: Assert one complete backup pair remains after retention
+      - name: Assert one complete backup bundle remains after retention
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_json="$RUNNER_TEMP/retained-release.json"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" > "$release_json"
-          backup_name=$(jq -r '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".metadata.json") | not)] | if length == 1 then .[0] else empty end' "$release_json")
+          backup_name=$(jq -r '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".json") | not)] | if length == 1 then .[0] else empty end' "$release_json")
           test -n "$backup_name"
           jq -e --arg metadata "$backup_name.metadata.json" '[.assets[].name] | index($metadata) != null' "$release_json" > /dev/null
+          jq -e --arg manifest "$backup_name.manifest.json" '[.assets[].name] | index($manifest) != null' "$release_json" > /dev/null
           metadata_count=$(jq '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".metadata.json"))] | length' "$release_json")
+          manifest_count=$(jq '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".manifest.json"))] | length' "$release_json")
           test "$metadata_count" -eq 1
+          test "$manifest_count" -eq 1
 
       - name: Add unrelated asset to test reset fail-closed behavior
         env:

@@ -4,7 +4,12 @@ import type {
   RepositoryTarget,
   StateManagerContext,
 } from "./types.mjs";
-import { metadataName } from "./asset-names.mjs";
+import {
+  backupObjectName,
+  manifestName,
+  metadataName,
+  signatureName,
+} from "./asset-names.mjs";
 
 export const RESET_CONFIRMATION = "RESET";
 
@@ -23,7 +28,9 @@ export function isResetAsset(
   return (
     assetName === stateAssetName ||
     assetName === metadataName(stateAssetName) ||
-    assetName.startsWith(`${stateAssetName}.backup-`)
+    assetName === manifestName(stateAssetName) ||
+    assetName === signatureName(stateAssetName) ||
+    Boolean(backupObjectName(assetName, stateAssetName))
   );
 }
 

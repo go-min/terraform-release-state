@@ -32,15 +32,15 @@ inputs:
     required: false
     default: ""
   backup-retention:
-    description: Number of backup assets to retain.
+    description: Number of complete backup bundles to retain.
     required: false
     default: "20"
   source-commit:
-    description: Commit SHA written to backup metadata.
+    description: Commit SHA written to backup metadata and manifests.
     required: false
     default: ""
   workflow-run-id:
-    description: Workflow run ID written to backup metadata.
+    description: Workflow run ID written to backup metadata and manifests.
     required: false
     default: ""
   confirmation:
@@ -83,6 +83,18 @@ inputs:
     description: Secret newline-delimited AGE-SECRET-KEY-1 identities required to restore with encryption=age.
     required: false
     default: ""
+  signature-policy:
+    description: "Manifest signature policy: allow-unsigned or require. Signed objects always require a matching verification key."
+    required: false
+    default: allow-unsigned
+  signing-private-key:
+    description: Unencrypted PKCS#8 PEM Ed25519 private key used only by save to sign new manifests.
+    required: false
+    default: ""
+  verification-public-keys:
+    description: Newline-delimited Ed25519 public keys in ed25519:<base64url-raw-32-byte-key> format; multiple keys support rotation.
+    required: false
+    default: ""
 outputs:
   operation:
     description: Completed operation.
@@ -102,6 +114,24 @@ outputs:
     description: Locally computed SHA-256 checksum of the stored Release asset bytes (ciphertext when encryption is enabled).
   plaintext-state-sha256:
     description: Locally computed SHA-256 checksum of the plaintext Terraform state bytes.
+  storage-format:
+    description: Detected storage format; absent, legacy, or manifest-v1.
+  manifest-schema-version:
+    description: Validated manifest schema version when a manifest is present.
+  signature-status:
+    description: Manifest signature result; verified or unsigned.
+  signature-key-fingerprint:
+    description: Non-secret SHA-256 fingerprint of the Ed25519 key that verified the manifest.
+  stored-state-verification:
+    description: Stored-byte verification result; verified, not-recorded, or not-performed.
+  plaintext-state-verification:
+    description: Plaintext verification result; verified, authenticated, not-recorded, or not-performed.
+  warning-count:
+    description: Number of structured compatibility or signature warnings.
+  warning-codes-json:
+    description: JSON array of stable warning codes.
+  error-code:
+    description: Stable TRS_* failure code when the action fails.
   state-write-committed:
     description: Whether save verified and committed a new authoritative current state, including when later maintenance fails.
   state-phase:
@@ -111,7 +141,7 @@ outputs:
   backup-asset-name:
     description: Backup asset created during save, when applicable.
   backup-count:
-    description: Number of retained backup assets after save.
+    description: Number of retained backup bundles after save.
   reset-deleted-asset-count:
     description: Number of state and backup assets deleted by reset.
   reset-release-found:

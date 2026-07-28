@@ -3,8 +3,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-// @ts-expect-error Node's native TypeScript runner resolves this source path directly.
-import { core } from "../src/action-core.mts";
+const { core } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/action-core.mjs"
+);
 
 test("outputs use a safe environment-file delimiter", () => {
   const directory = mkdtempSync(join(tmpdir(), "terraform-release-output-"));
