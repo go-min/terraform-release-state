@@ -11,7 +11,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "trap 'rm -rf .build' EXIT; tsc -p tsconfig.build.json && cp .build/src/main.mjs .build/src/main.js && rm -f dist/index.mjs dist/index.mjs.map && ncc build .build/src/main.js --minify --source-map",
+    "build": "rm -rf .build && trap 'rm -rf .build' EXIT; tsc -p tsconfig.build.json && cp .build/src/main.mjs .build/src/main.js && rm -f dist/index.mjs dist/index.mjs.map && XDG_CACHE_HOME=\"$PWD/.build/.cache\" ncc build .build/src/main.js --minify --source-map --no-cache",
     "format": "biome format --write package.json src tests && prettier --write action.yml '.github/workflows/*.yml' '**/*.md'",
     "format:check": "biome format package.json commitlint.config.mjs src tests && prettier --check action.yml '.github/workflows/*.yml' '**/*.md'",
     "lint": "biome lint package.json commitlint.config.mjs src tests && markdownlint-cli2 '**/*.md' '#node_modules/**'",
