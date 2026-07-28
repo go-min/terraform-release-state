@@ -37,10 +37,15 @@ protected environments.
 
 ## Guarantees
 
-- Restore and import validate the remote state before use.
+- Restore and import validate the remote state before use and do not update an
+  existing Release or its metadata.
 - Save rejects a changed remote marker and never uses silent last-write-wins.
-- Backups have paired `.metadata.json` assets and bounded retention.
+- Backups have paired `.metadata.json` assets; both newly uploaded objects are
+  downloaded, hashed, and checked for binding before current-state replacement.
 - Uploads are verified by downloading and hashing the resulting asset.
+- A verified current-state replacement is reported as committed before
+  post-commit retention and orphan maintenance; maintenance failure preserves
+  the authoritative marker in machine-readable outputs while failing the step.
 - Reset audits the managed namespace and treats `404` deletes as idempotent.
 - Local state writes are workspace-contained and use restrictive permissions.
 - Import generation suppresses targets already declared in non-generated `.tf`
@@ -67,3 +72,5 @@ Unit tests use the Node.js Native Test Runner with a mocked GitHub API.
 Integration tests use disposable Release namespaces and cover bootstrap,
 description, consistency conflicts, retention, encryption integrity,
 recovery, and reset. Runtime behavior changes require rebuilding `dist`.
+Release Please depends on this reusable integration workflow and therefore
+cannot create or publish a release before the exact candidate SHA passes it.

@@ -6,6 +6,7 @@ import {
 } from "./asset-names.mjs";
 import {
   deleteAsset,
+  downloadAsset,
   findAsset,
   listAssets,
   uploadAsset,
@@ -45,8 +46,9 @@ export async function createBackup(
     name,
     previous,
   );
+  let uploadedMetadata: Asset | undefined;
   try {
-    await uploadAsset(
+    uploadedMetadata = await uploadAsset(
       octokit,
       config.target,
       release.id,
@@ -54,17 +56,54 @@ export async function createBackup(
       metadata,
       "application/json",
     );
+    const [verifiedBackup, verifiedMetadata] = await Promise.all([
+      downloadAsset(octokit, config.target, backup),
+      downloadAsset(octokit, config.target, uploadedMetadata),
+    ]);
+    if (sha256(verifiedBackup) !== sha256(previous)) {
+      throw new Error(
+        `Backup state asset ${name} failed checksum verification.`,
+      );
+    }
+    if (sha256(verifiedMetadata) !== sha256(metadata)) {
+      throw new Error(
+        `Backup metadata asset ${metadataName(name)} failed checksum verification.`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(verifiedMetadata.toString("utf8"));
+    } catch {
+      throw new Error(
+        `Backup metadata asset ${metadataName(name)} is invalid JSON.`,
+      );
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !("sha256" in parsed) ||
+      parsed.sha256 !== sha256(verifiedBackup) ||
+      !("current_asset" in parsed) ||
+      parsed.current_asset !== current.name ||
+      !("encryption" in parsed) ||
+      parsed.encryption !== config.encryption.mode
+    ) {
+      throw new Error(
+        `Backup metadata asset ${metadataName(name)} is not bound to the uploaded backup.`,
+      );
+    }
   } catch (error) {
     try {
       const assets = await listAssets(octokit, config.target, release.id);
-      const uploadedMetadata = findAsset(assets, metadataName(name));
-      if (uploadedMetadata) {
-        await deleteAsset(octokit, config.target, uploadedMetadata.id);
+      const listedMetadata = findAsset(assets, metadataName(name));
+      const metadataToDelete = listedMetadata || uploadedMetadata;
+      if (metadataToDelete) {
+        await deleteAsset(octokit, config.target, metadataToDelete.id);
       }
       await deleteAsset(octokit, config.target, backup.id);
     } catch (cleanupError) {
       throw new Error(
-        `Backup metadata upload failed and compensating cleanup could not complete: ${errorMessage(cleanupError)}`,
+        `Backup pair creation failed and compensating cleanup could not complete: ${errorMessage(cleanupError)}`,
         { cause: error },
       );
     }

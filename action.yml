@@ -6,7 +6,7 @@ inputs:
     description: "State operation: restore, save, reset, or import."
     required: true
   github-token:
-    description: Token with the required Contents access to the state repository.
+    description: Token with Contents read for restore/import; Contents write is required only for bootstrap, save, reset, or import PR changes.
     required: true
   state-repository:
     description: owner/name of the repository that stores the Release asset.
@@ -95,9 +95,19 @@ outputs:
   remote-state-marker:
     description: Opaque marker to pass from restore to save.
   state-digest:
-    description: SHA-256 digest of the local state asset.
+    description: GitHub-reported SHA-256 digest of the stored Release asset when available; retained for compatibility.
   state-sha256:
-    description: SHA-256 checksum of the local state file.
+    description: SHA-256 checksum of the plaintext state; retained for compatibility.
+  stored-state-sha256:
+    description: Locally computed SHA-256 checksum of the stored Release asset bytes (ciphertext when encryption is enabled).
+  plaintext-state-sha256:
+    description: Locally computed SHA-256 checksum of the plaintext Terraform state bytes.
+  state-write-committed:
+    description: Whether save verified and committed a new authoritative current state, including when later maintenance fails.
+  state-phase:
+    description: Last completed state lifecycle phase; complete on success or maintenance when post-commit cleanup fails.
+  state-status:
+    description: State lifecycle status; success or maintenance-failed.
   backup-asset-name:
     description: Backup asset created during save, when applicable.
   backup-count:

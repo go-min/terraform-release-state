@@ -34,7 +34,8 @@ function emitOutputs(
   operation: string,
   release: Release,
   asset: Asset | undefined,
-  data: Buffer | undefined,
+  storedData: Buffer | undefined,
+  plaintextData: Buffer | undefined,
   bootstrapped = false,
 ): void {
   core.setOutput("operation", operation);
@@ -45,10 +46,33 @@ function emitOutputs(
     core.setOutput("state-asset-id", asset.id);
     core.setOutput("state-digest", assetDigest(asset));
   }
-  if (data) core.setOutput("state-sha256", sha256(data));
+  if (storedData) {
+    core.setOutput("stored-state-sha256", sha256(storedData));
+  }
+  if (plaintextData) {
+    const plaintextDigest = sha256(plaintextData);
+    core.setOutput("state-sha256", plaintextDigest);
+    core.setOutput("plaintext-state-sha256", plaintextDigest);
+  }
 }
 
-async function ensureRelease(context: StateManagerContext): Promise<Release> {
+async function getOrBootstrapRelease(
+  context: StateManagerContext,
+): Promise<Release> {
+  const { octokit, config } = context;
+  const existing = await getRelease(octokit, config.target, config.tag);
+  if (existing) return existing;
+  if (!config.bootstrap) {
+    fail(
+      `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
+    );
+  }
+  return createRelease(octokit, config.target, config.tag, config.assetName);
+}
+
+async function ensureManagedRelease(
+  context: StateManagerContext,
+): Promise<Release> {
   const { octokit, config } = context;
   const existing = await getRelease(octokit, config.target, config.tag);
   const body = managedReleaseBody(config.target, config.tag, config.assetName);
@@ -117,7 +141,7 @@ export async function readStoredState(
 
 export async function restore(context: StateManagerContext): Promise<void> {
   const { octokit, config } = context;
-  const release = await ensureRelease(context);
+  const release = await getOrBootstrapRelease(context);
   const assets = await listAssets(octokit, config.target, release.id);
   const asset = findAsset(assets, config.assetName);
   const metadata = findAsset(assets, metadataName(config.assetName));
@@ -141,13 +165,19 @@ export async function restore(context: StateManagerContext): Promise<void> {
     core.setOutput("release-id", release.id);
     core.setOutput("bootstrapped", true);
     core.setOutput("remote-state-marker", "absent");
+    core.setOutput("state-write-committed", false);
+    core.setOutput("state-phase", "complete");
+    core.setOutput("state-status", "success");
     return;
   }
   const ciphertext = await downloadAsset(octokit, config.target, asset);
   await loadCurrentMetadata(context, assets, ciphertext);
   const plaintext = await decryptState(config.encryption, ciphertext);
   writeStateFile(config.statePath, config.workspace, plaintext);
-  emitOutputs("restore", release, asset, plaintext);
+  emitOutputs("restore", release, asset, ciphertext, plaintext);
+  core.setOutput("state-write-committed", false);
+  core.setOutput("state-phase", "complete");
+  core.setOutput("state-status", "success");
 }
 
 async function recoverPreviousState(
@@ -221,7 +251,7 @@ export async function save(context: StateManagerContext): Promise<void> {
   const expected = config.expectedMarker
     ? decodeMarker(config.expectedMarker)
     : undefined;
-  const release = await ensureRelease(context);
+  const release = await ensureManagedRelease(context);
   let assets = await listAssets(octokit, config.target, release.id);
   let current = findAsset(assets, config.assetName);
   const previousAsset = current;
@@ -358,8 +388,22 @@ export async function save(context: StateManagerContext): Promise<void> {
     }
     throw error;
   }
-  const backupCount = await retainBackups(context, assets);
-  emitOutputs("save", release, current, plaintext, bootstrapped);
+  emitOutputs("save", release, current, data, plaintext, bootstrapped);
   core.setOutput("backup-asset-name", backup);
-  core.setOutput("backup-count", backupCount);
+  core.setOutput("state-write-committed", true);
+  core.setOutput("state-phase", "maintenance");
+  try {
+    const backupCount = await retainBackups(context, assets);
+    core.setOutput("backup-count", backupCount);
+    core.setOutput("state-phase", "complete");
+    core.setOutput("state-status", "success");
+  } catch (error) {
+    core.setOutput("state-status", "maintenance-failed");
+    throw new Error(
+      `State save committed and verified, but post-commit backup maintenance failed: ${
+        error instanceof Error ? error.message : "unknown maintenance error"
+      }. The emitted remote-state-marker identifies the authoritative new state; restore again before the next save and inspect backup retention separately.`,
+      { cause: error },
+    );
+  }
 }
