@@ -45,7 +45,7 @@ steps:
 
   - name: Restore Terraform state
     id: state-restore
-    uses: go-min/terraform-release-state@v0.2.1
+    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
     with:
       operation: restore
       github-token: ${{ github.token }}
@@ -56,7 +56,7 @@ steps:
 
   - name: Save Terraform state
     if: ${{ always() && steps.state-restore.outcome == 'success' }}
-    uses: go-min/terraform-release-state@v0.2.1
+    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
     with:
       operation: save
       github-token: ${{ github.token }}
@@ -81,6 +81,9 @@ below. Do not use a classic PAT as the primary production credential.
 
 `restore` fails closed when the Release, current asset, metadata, or integrity
 checks are invalid. A missing namespace is not treated as an access error.
+For existing storage, restore is read-only and preserves the Release name,
+body, and other operator-managed metadata. Contents write is needed only when
+explicit bootstrap must create missing storage.
 
 Use `bootstrap: "true"` only for first-time setup or an approved recovery:
 
@@ -99,9 +102,17 @@ import resources, or create infrastructure.
 
 For an existing state, `save` requires the opaque marker returned by
 `restore`. Before replacing the current asset it verifies that the remote state
-has not changed, creates a backup pair, uploads the new state, downloads it for
+has not changed, creates a backup pair, downloads and cryptographically verifies
+both newly uploaded backup objects, uploads the new state, downloads it for
 verification, and applies retention. A concurrent or manual change fails the
-save instead of using last-write-wins.
+save instead of using last-write-wins. The existing current state is not deleted
+until its newly uploaded backup pair has passed verification.
+
+The verified replacement is the commit boundary. If later retention or orphan
+cleanup fails, the action still fails, but `state-write-committed` is `true`,
+`state-phase` is `maintenance`, `state-status` is `maintenance-failed`, and the
+new `remote-state-marker` identifies the authoritative state. Restore again
+before a later save and handle cleanup as a separate recovery task.
 
 Release asset replacement is not atomic. Guarded recovery and backups reduce
 risk but do not provide backend-style transactions.
@@ -126,7 +137,7 @@ Default mode prints a diff only:
 
 ```yaml
 - name: Review Terraform imports
-  uses: go-min/terraform-release-state@v0.2.1
+  uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
   with:
     operation: import
     github-token: ${{ github.token }}
@@ -143,7 +154,7 @@ permissions:
 
 steps:
   - name: Propose Terraform imports
-    uses: go-min/terraform-release-state@v0.2.1
+    uses: go-min/terraform-release-state@f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6 # v0.3.0
     with:
       operation: import
       github-token: ${{ github.token }}
@@ -257,7 +268,13 @@ context values and are recorded in backup metadata.
 
 Outputs contain only identifiers, checksums, counts, and the opaque remote
 marker. The action never returns Terraform state, credentials, keys, or other
-secret content. See `action.yml` for the complete output list.
+secret content. `state-sha256` remains the plaintext checksum for compatibility,
+while `plaintext-state-sha256` names that meaning explicitly.
+`stored-state-sha256` hashes the exact uploaded/downloaded Release bytes, so it
+differs from the plaintext checksum when age encryption is enabled.
+`state-digest` remains GitHub's reported stored-asset digest when GitHub supplies
+one; it is not silently redefined as either new checksum output. See `action.yml`
+for the complete output list.
 
 Import operations additionally return `import-candidate-count` (rendered
 blocks after collision suppression), `import-skipped-count` (all excluded
@@ -273,12 +290,13 @@ or closed.
   boundary.
 - A lost age identity makes matching encrypted state unrecoverable.
 - A compromised runner can access plaintext state supplied to Terraform.
-- Marketplace publication is not enabled. Use the stable version tag shown in
-  each release, such as `v0.2.1`.
+- Marketplace publication is not enabled. The current immutable release pin is
+  `f7a3bc9bb80ceaf8b4bd554de1dbfc510358eee6` (`v0.3.0`).
 - For stronger supply-chain protection, pin the full immutable commit SHA from
   the release and keep the version in a comment.
-- Releases are prepared by a reviewed Release PR and published by
-  release-please after that PR is merged.
+- Releases are prepared by a reviewed Release PR. After each `main` update,
+  publication automation waits for disposable integration against that exact
+  candidate SHA before Release Please can create a PR or publish a release.
 
 See the [release process](docs/releasing.md) for maintainer instructions and
 the [changelog](CHANGELOG.md) for the release history.

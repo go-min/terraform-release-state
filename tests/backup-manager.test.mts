@@ -39,8 +39,12 @@ function asset(id: number, name: string, createdAt: string) {
 
 test("backup upload creates paired recovery metadata", async () => {
   const uploads: Array<{ name: string; data: Buffer }> = [];
+  const payloads = new Map<number, Buffer>();
   let nextId = 1;
   const octokit = {
+    request: async (_route: string, options: { asset_id: number }) => ({
+      data: payloads.get(options.asset_id),
+    }),
     rest: {
       repos: {
         uploadReleaseAsset: async ({
@@ -51,6 +55,7 @@ test("backup upload creates paired recovery metadata", async () => {
           data: Buffer;
         }) => {
           uploads.push({ name, data });
+          payloads.set(nextId, data);
           return {
             data: asset(nextId++, name, "2026-07-26T10:00:00Z"),
           };
@@ -73,6 +78,104 @@ test("backup upload creates paired recovery metadata", async () => {
   assert.equal(metadata.workflow_run_id, "run-id");
   assert.equal(metadata.current_asset, "terraform.tfstate");
   assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
+});
+
+test("corrupt backup state download removes the uploaded pair", async () => {
+  const deleted: number[] = [];
+  const payloads = new Map<number, Buffer>();
+  let assets: ReturnType<typeof asset>[] = [];
+  let nextId = 1;
+  const octokit = {
+    paginate: async () => assets,
+    request: async (_route: string, options: { asset_id: number }) => ({
+      data:
+        options.asset_id === 1
+          ? Buffer.from("corrupt-state")
+          : payloads.get(options.asset_id),
+    }),
+    rest: {
+      repos: {
+        listReleaseAssets: "list",
+        uploadReleaseAsset: async ({
+          name,
+          data,
+        }: {
+          name: string;
+          data: Buffer;
+        }) => {
+          const uploaded = asset(nextId++, name, "2026-07-26T10:00:00Z");
+          assets.push(uploaded);
+          payloads.set(uploaded.id, data);
+          return { data: uploaded };
+        },
+        deleteReleaseAsset: async ({ asset_id }: { asset_id: number }) => {
+          deleted.push(asset_id);
+          assets = assets.filter((item) => item.id !== asset_id);
+        },
+      },
+    },
+  } as never;
+
+  await assert.rejects(
+    createBackup(
+      { octokit, config: baseConfig } as never,
+      release,
+      { name: "terraform.tfstate" } as never,
+      Buffer.from("previous-state"),
+    ),
+    /Backup state asset .* failed checksum verification/,
+  );
+  assert.deepEqual(deleted, [2, 1]);
+  assert.deepEqual(assets, []);
+});
+
+test("corrupt backup metadata download removes the uploaded pair", async () => {
+  const deleted: number[] = [];
+  const payloads = new Map<number, Buffer>();
+  let assets: ReturnType<typeof asset>[] = [];
+  let nextId = 1;
+  const octokit = {
+    paginate: async () => assets,
+    request: async (_route: string, options: { asset_id: number }) => ({
+      data:
+        options.asset_id === 2
+          ? Buffer.from("corrupt-metadata")
+          : payloads.get(options.asset_id),
+    }),
+    rest: {
+      repos: {
+        listReleaseAssets: "list",
+        uploadReleaseAsset: async ({
+          name,
+          data,
+        }: {
+          name: string;
+          data: Buffer;
+        }) => {
+          const uploaded = asset(nextId++, name, "2026-07-26T10:00:00Z");
+          assets.push(uploaded);
+          payloads.set(uploaded.id, data);
+          return { data: uploaded };
+        },
+        deleteReleaseAsset: async ({ asset_id }: { asset_id: number }) => {
+          deleted.push(asset_id);
+          assets = assets.filter((item) => item.id !== asset_id);
+        },
+      },
+    },
+  } as never;
+
+  await assert.rejects(
+    createBackup(
+      { octokit, config: baseConfig } as never,
+      release,
+      { name: "terraform.tfstate" } as never,
+      Buffer.from("previous-state"),
+    ),
+    /Backup metadata asset .* failed checksum verification/,
+  );
+  assert.deepEqual(deleted, [2, 1]);
+  assert.deepEqual(assets, []);
 });
 
 test("metadata upload failure removes the partial backup", async () => {
@@ -151,7 +254,10 @@ test("backup cleanup failure preserves the metadata upload error as cause", asyn
   }
 
   assert.ok(caught instanceof Error);
-  assert.match(caught.message, /compensating cleanup could not complete/);
+  assert.match(
+    caught.message,
+    /Backup pair creation failed and compensating cleanup could not complete/,
+  );
   assert.match(String(caught.cause), /HTTP 403/);
   assert.equal(deleteAttempts, 5);
 });

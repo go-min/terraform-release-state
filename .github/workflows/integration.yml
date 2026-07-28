@@ -1,13 +1,11 @@
 name: Disposable integration
 
 on:
-  push:
-    branches:
-      - main
+  workflow_call:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: terraform-release-state-disposable-integration
@@ -15,6 +13,8 @@ concurrency:
 
 jobs:
   integration:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -25,6 +25,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify exact release candidate checkout
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Install pnpm
         run: npm install --global pnpm@11.17.0 --ignore-scripts

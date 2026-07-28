@@ -10,23 +10,26 @@ writers as untrusted.
 
 ## Controls
 
-| Threat                                   | Control                                                                |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| State or credential disclosure           | No state/key outputs; masked secrets; escaped workflow commands        |
-| Path traversal or symlink escape         | Workspace containment, real-directory checks, regular files only       |
-| Corrupt or substituted state             | GitHub digest, SHA-256 verification, bound metadata                    |
-| Stale concurrent writer                  | Consumer concurrency plus restore/save marker checks                   |
-| Accidental empty-state recreation        | Explicit bootstrap; access errors remain failures                      |
-| Partial replacement or backup corruption | Paired backups, compensation, orphan cleanup, metadata-first retention |
-| Over-broad reset                         | Exact confirmation, namespace audit, post-delete verification          |
-| Ambiguous API mutation                   | Reconcile expected remote content before accepting success             |
-| Import branch overwrite or race          | Full tree diff, generated-path allowlist, expected head, non-force ref |
-| Duplicate Terraform import target        | Structural HCL scan and explicit collision suppression                 |
-| Import path symlink or realpath escape   | Lexical plus realpath containment; PR mode avoids local import reads   |
-| Dependency compromise                    | Lockfile, pinned actions, dependency review, CodeQL, Dependabot        |
+| Threat                                   | Control                                                                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| State or credential disclosure           | No state/key outputs; masked secrets; escaped workflow commands                                                    |
+| Path traversal or symlink escape         | Workspace containment, real-directory checks, regular files only                                                   |
+| Corrupt or substituted state             | GitHub digest, SHA-256 verification, bound metadata                                                                |
+| Stale concurrent writer                  | Consumer concurrency plus restore/save marker checks                                                               |
+| Accidental empty-state recreation        | Explicit bootstrap; access errors remain failures                                                                  |
+| Partial replacement or backup corruption | Downloaded SHA-256 verification of each new backup pair before replacement; compensation; metadata-first retention |
+| Over-broad reset                         | Exact confirmation, namespace audit, post-delete verification                                                      |
+| Ambiguous API mutation                   | Reconcile expected remote content before accepting success                                                         |
+| Import branch overwrite or race          | Full tree diff, generated-path allowlist, expected head, non-force ref                                             |
+| Duplicate Terraform import target        | Structural HCL scan and explicit collision suppression                                                             |
+| Import path symlink or realpath escape   | Lexical plus realpath containment; PR mode avoids local import reads                                               |
+| Dependency compromise                    | Lockfile, pinned actions, dependency review, CodeQL, Dependabot                                                    |
 
 Age encryption uses native X25519 recipients. Identities remain masked and in
 memory; plaintext state is not written to outputs, logs, artifacts, or caches.
+Digest outputs contain only hashes: `stored-state-sha256` covers stored bytes
+and `plaintext-state-sha256` covers decrypted state. Existing `state-digest`
+and `state-sha256` meanings remain compatible.
 
 Import proposals are read-only unless explicit PR mode is enabled. PR mode
 writes only the configured imports file, never Terraform state. Generated
