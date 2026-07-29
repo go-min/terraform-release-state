@@ -2,6 +2,13 @@
 
 Release history for Terraform Release State.
 
+## [0.4.0](https://github.com/go-min/terraform-release-state/compare/v0.3.1...v0.4.0) (2026-07-28)
+
+
+### Features
+
+* add signed state manifests ([#35](https://github.com/go-min/terraform-release-state/issues/35)) ([ebf2006](https://github.com/go-min/terraform-release-state/commit/ebf2006d4749660cad666f2f3fdeed6c38d96702))
+
 ## [0.3.1](https://github.com/go-min/terraform-release-state/compare/v0.3.0...v0.3.1) (2026-07-28)
 
 
