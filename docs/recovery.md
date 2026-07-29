@@ -1,80 +1,95 @@
 # Recovery and reset
 
-The action fails closed when state is missing, corrupt, inaccessible, or
-changed by another writer. Recovery is an operator decision; the action does
-not recreate infrastructure, infer imports, or run Terraform.
+Recovery is an operator decision in a protected workflow. The action never
+runs Terraform, recreates infrastructure, or guesses which backup is correct.
 
 ## Failure responses
 
-| Failure                                | Response                                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Release or current asset missing       | Investigate access/deletion; bootstrap only after approval                                              |
-| Manifest, signature, or digest failure | Stop Terraform; inspect the latest complete backup and configured verification keys                     |
-| `TRS_DECRYPTION_FAILED`                | Check that the supplied age identity matches; do not infer a plaintext digest mismatch                  |
-| `TRS_PLAINTEXT_DIGEST_MISMATCH`        | Decryption succeeded but plaintext differs from the manifest; stop and investigate corruption           |
-| Legacy age migration needs identity    | Supply the matching age identity and current recipients; no remote mutation has occurred                |
-| Remote marker changed                  | Do not overwrite; restore again after resolving the competing writer                                    |
-| Save replacement and recovery fail     | Preserve local state; inspect current and backup assets before mutation                                 |
-| Retention fails after save             | If `state-write-committed=true`, use the emitted new marker; restore again and retry cleanup separately |
-| Reset partially fails                  | Retry reset with the same target; deletions are idempotent                                              |
-| Import branch has unrelated changes    | Preserve it; move the changes or choose a new reviewed `pr-branch`                                      |
-| Obsolete import PR is closed           | Branch is retained; delete it only after manual review                                                  |
-| Import path fails containment          | Replace symlinks with regular workspace paths; do not bypass the check                                  |
+| Failure                           | Required response                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------- |
+| Release/state absent              | Investigate access or deletion; use protected bootstrap only after approval       |
+| `TRS_RESTORE_RECEIPT_REQUIRED`    | Run restore in the same job before save                                           |
+| `TRS_REMOTE_CHANGED`              | Stop; inspect the competing writer and restore again                              |
+| Manifest or digest failure        | Stop Terraform; do not promote unverified bytes                                   |
+| `TRS_V04_MIGRATION_REQUIRED`      | Pin v0.4.0, decrypt/verify there, and migrate to plaintext unsigned storage       |
+| Save/promotion rollback failure   | Preserve local state and inspect current plus safety backups before mutation      |
+| `state-status=maintenance-failed` | Trust the emitted committed marker, run restore, then repair retention separately |
+| Import branch unrelated changes   | Preserve the branch and move/review those changes before rerun                    |
 
-Import PR refresh never force-updates a branch. If the expected branch head
-changes during refresh, rerun after inspecting the new diff. When generated
-content already exists on base, an action-only open PR is closed but its branch
-is retained because GitHub does not offer an expected-SHA condition for ref
-deletion.
+Active v0.5 failures use stable codes: `TRS_CONFIG_INVALID`,
+`TRS_OBJECT_NOT_FOUND`, `TRS_OBJECT_SET_INCOMPLETE`,
+`TRS_MANIFEST_INVALID`, `TRS_MANIFEST_UNSUPPORTED_VERSION`,
+`TRS_MANIFEST_OBJECT_MISMATCH`, `TRS_STORED_DIGEST_MISMATCH`,
+`TRS_PLAINTEXT_DIGEST_MISMATCH`, `TRS_V04_MIGRATION_REQUIRED`,
+`TRS_RESTORE_RECEIPT_REQUIRED`, `TRS_RESTORE_RECEIPT_INVALID`,
+`TRS_REMOTE_CHANGED`, `TRS_API_FAILURE`, and `TRS_UNEXPECTED`. Older v0.4
+crypto-specific codes remain reserved for output compatibility, but v0.5 has
+no key or decryption execution path.
 
-Never restore an older backup over a newer local state from a partially
-successful `terraform apply`. Save the newer local state first when its marker
-and lineage are valid.
+Never promote an older backup merely because it is newest by timestamp. Review
+its Terraform serial, lineage correlation identifier, source workflow, and the
+history of any partially successful apply.
 
-## Reset
+## Reset all
 
-Reset requires `operation: reset`, exact `confirmation: RESET`, and Contents
-write access to the configured state repository. Before deletion it audits all
-Release assets and refuses unexpected assets. It then deletes only the managed
-current asset, metadata, backups, Release, and tag. A missing resource is
-already-reset success.
+`reset-target: all` audits the fixed `terraform-state` Release. It refuses
+unrelated assets and encrypted/signed managed storage, then deletes the owned
+assets, Release, and tag. Missing resources are already-reset success.
 
-Protect reset behind a reviewed workflow, protected environment, or equivalent
-approval boundary:
+Confirmation is not an action input. The existing protected reset workflow
+must require exact `RESET` confirmation before it invokes the action.
 
 ```yaml
-- name: Reset approved state storage
-  uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
+- name: Delete approved state storage
+  if: ${{ inputs.confirmation == 'RESET' }}
+  uses: go-min/terraform-release-state@<v0.5.0-release-commit-sha> # v0.5.0
   with:
     operation: reset
-    confirmation: RESET
-    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: owner/state-repository
+    github-token: ${{ github.token }}
+    reset-target: all
 ```
+
+## Promote one backup
+
+Supply the exact backup state object name, not its metadata or manifest:
+
+```yaml
+- name: Promote approved backup
+  if: ${{ inputs.confirmation == 'RESET' }}
+  uses: go-min/terraform-release-state@<v0.5.0-release-commit-sha> # v0.5.0
+  with:
+    operation: reset
+    github-token: ${{ github.token }}
+    reset-target: terraform.tfstate.backup-20260729T100000000Z-run-uuid
+```
+
+Promotion validates the exact target and current bundle, creates and verifies a
+safety backup of current when present, repeats marker checks, replaces current
+state with manifest last, and downloads it for verification. The selected
+backup is not deleted or renamed.
+
+If replacement fails, every observed partial current object is removed and the
+complete prior current bundle is restored and verified. If current was absent,
+recovery ensures no partial current remains. A safety backup created before a
+later CAS conflict may remain intentionally.
+
+Successful promotion emits `reset-action=promoted`, the exact `reset-target`,
+`reset-promoted-marker`, and the standard committed lifecycle outputs. Run
+restore before any subsequent save. The next save, not promotion, enforces
+retention 20.
 
 ## Clean bootstrap
 
-After an approved reset, restore with explicit bootstrap. This creates an empty
-Release boundary and returns the opaque `remote-state-marker: absent`; it does
-not create state content or infrastructure.
+After approved `reset-target: all`, set `TERRAFORM_BOOTSTRAP=true` only on the
+protected bootstrap job and run restore. It creates an empty Release and an
+absent-state receipt. Terraform must create repository-root
+`terraform.tfstate`; save then verifies and publishes it.
 
-```yaml
-- name: Bootstrap clean state storage
-  id: state-restore
-  uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
-  with:
-    operation: restore
-    bootstrap: "true"
-    github-token: ${{ secrets.STATE_REPOSITORY_TOKEN }}
-    state-repository: owner/state-repository
-    state-path: terraform.tfstate
-```
+## Encrypted or signed v0.4 storage
 
-Run Terraform only after reviewing why state was reset. Save the resulting
-state with the marker from `state-restore`.
-
-## Encrypted recovery
-
-GitHub access cannot decrypt age-encrypted state without a matching identity.
-Retain old identities until all backups encrypted for them have expired or
-been intentionally removed. Test a new identity before removing the old one.
+v0.5 cannot decrypt or verify signatures and will not discard their security
+properties implicitly. Use immutable v0.4.0
+`fb529572e17d20c414afacc7a7e14ffa0033058d` with the original identities or
+verification keys to restore and validate the state. Convert it deliberately
+to plaintext unsigned storage before upgrading. Do not manually delete only a
+metadata or signature companion.

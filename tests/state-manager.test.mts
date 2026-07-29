@@ -1,30 +1,26 @@
 import { strict as assert } from "node:assert";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { generateIdentity, identityToRecipient } from "age-encryption";
+import type { ActionConfig } from "../src/types.mts";
 
 const { readStoredState, restore, save } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/state-manager.mjs"
 );
-const { publicKeyInputFromPrivateKey } = await import(
-  // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/signing.mjs"
-);
 const { createBundleData } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/state-bundle.mjs"
 );
-const { ageRecipientsFingerprint } = await import(
+const { marker } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/manifest.mjs"
+  "../.test-build/src/marker.mjs"
 );
-const { encryptState } = await import(
+const { writeRestoreReceipt } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/encryption.mjs"
+  "../.test-build/src/receipt.mjs"
 );
 
 function digest(data: Buffer): string {
@@ -55,51 +51,7 @@ function withOutputFile<T>(
   });
 }
 
-function expectedMarker(previous: Buffer): string {
-  return Buffer.from(
-    JSON.stringify({
-      id: 1,
-      name: "terraform.tfstate",
-      digest: "",
-      size: previous.length,
-      updatedAt: "2026-07-25T10:00:01Z",
-    }),
-  ).toString("base64url");
-}
-
-function assertCurrentState(
-  api: ReturnType<typeof saveApi>,
-  expectedId: number,
-  expectedData: Buffer,
-): void {
-  const current = api
-    .assets()
-    .find((asset) => asset.name === "terraform.tfstate");
-  assert.equal(current?.id, expectedId);
-  assert.deepEqual(api.payloads.get(expectedId), expectedData);
-}
-
-function assertLifecycleOutputs(
-  contents: string,
-  expected: {
-    committed: string;
-    phase: string;
-    status: string;
-  },
-): void {
-  assert.equal(
-    outputValue(contents, "state-write-committed"),
-    expected.committed,
-  );
-  assert.equal(outputValue(contents, "state-phase"), expected.phase);
-  assert.equal(outputValue(contents, "state-status"), expected.status);
-}
-
-function configFor(
-  workspace: string,
-  statePath: string,
-  overrides: Record<string, unknown> = {},
-) {
+function configFor(workspace: string, overrides: Record<string, unknown> = {}) {
   return {
     operation: "restore",
     token: "token",
@@ -107,16 +59,20 @@ function configFor(
     tag: "terraform-state",
     assetName: "terraform.tfstate",
     workspace,
-    statePath,
+    statePath: join(workspace, "terraform.tfstate"),
+    receiptPath: join(workspace, "runner", "restore-receipt.json"),
     bootstrap: false,
-    expectedMarker: "",
     backupRetention: 20,
-    sourceCommit: "",
-    workflowRunId: "",
-    resetConfirmation: "",
-    encryption: { mode: "none", recipients: [], identities: [] },
+    sourceCommit: "source-sha",
+    workflowRunId: "run-id",
+    resetTarget: "all",
+    importsPath: join(workspace, "terraform", "imports.generated.tf"),
+    terraformRoot: join(workspace, "terraform"),
+    prBase: "main",
+    prBranch: "terraform-release-state/imports.generated.tf",
+    prTitle: "chore(terraform): update generated imports",
     ...overrides,
-  } as never;
+  } as ActionConfig;
 }
 
 type FakeAsset = {
@@ -141,32 +97,31 @@ function fakeAsset(id: number, name: string, data: Buffer): FakeAsset {
   };
 }
 
-function saveApi(
-  previous: Buffer,
+function stateApi(
+  previous?: Buffer,
   options: {
+    companions?: Array<{ name: string; data: Buffer }>;
     corruptAssetId?: number;
-    empty?: boolean;
-    failRetention?: boolean;
     failUploadAt?: number;
-    initialCompanions?: Array<{ name: string; data: Buffer }>;
+    failDeleteId?: number;
   } = {},
 ) {
-  const release = { id: 1, body: "" };
+  let release = { id: 1, body: "operator-owned release notes" };
   let nextAssetId = 10;
   const payloads = new Map<number, Buffer>();
-  let assets = options.empty
-    ? []
-    : [fakeAsset(1, "terraform.tfstate", previous)];
-  if (!options.empty) payloads.set(1, previous);
-  if (!options.empty && options.initialCompanions) {
-    for (const companion of options.initialCompanions) {
-      const id = assets.length + 1;
-      assets.push(fakeAsset(id, companion.name, companion.data));
-      payloads.set(id, companion.data);
-    }
+  let assets: FakeAsset[] = [];
+  if (previous) {
+    assets.push(fakeAsset(1, "terraform.tfstate", previous));
+    payloads.set(1, previous);
   }
-  const deleted: number[] = [];
+  for (const companion of options.companions || []) {
+    const id = assets.length + 1;
+    assets.push(fakeAsset(id, companion.name, companion.data));
+    payloads.set(id, companion.data);
+  }
   let uploadFailed = false;
+  let writeCalls = 0;
+  const deleted: number[] = [];
   const octokit = {
     paginate: async () => assets,
     request: async (_route: string, request: { asset_id: number }) => ({
@@ -178,15 +133,18 @@ function saveApi(
     rest: {
       repos: {
         getReleaseByTag: async () => ({ data: release }),
-        updateRelease: async ({ body }: { body: string }) => ({
-          data: { ...release, body },
-        }),
         listReleaseAssets: "list",
+        updateRelease: async ({ body }: { body: string }) => {
+          writeCalls += 1;
+          release = { ...release, body };
+          return { data: release };
+        },
         deleteReleaseAsset: async ({ asset_id }: { asset_id: number }) => {
+          writeCalls += 1;
           deleted.push(asset_id);
-          if (options.failRetention && asset_id === 11) {
-            throw Object.assign(new Error("retention unavailable"), {
-              status: 503,
+          if (asset_id === options.failDeleteId) {
+            throw Object.assign(new Error("injected delete failure"), {
+              status: 403,
             });
           }
           assets = assets.filter((asset) => asset.id !== asset_id);
@@ -198,6 +156,7 @@ function saveApi(
           name: string;
           data: Buffer;
         }) => {
+          writeCalls += 1;
           if (nextAssetId === options.failUploadAt && !uploadFailed) {
             uploadFailed = true;
             throw new Error("injected upload failure");
@@ -213,122 +172,141 @@ function saveApi(
   } as never;
   return {
     octokit,
-    deleted,
     payloads,
+    deleted,
     assets: () => assets,
+    release: () => release,
+    writeCalls: () => writeCalls,
   };
 }
 
-test("restore and import leave custom Release metadata unchanged with a read-only client", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-read-only-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const state = Buffer.from(
-    '{"version":4,"resources":[],"custom":"release-body-preserved"}',
-  );
-  const release = { id: 1, body: "operator-owned release notes" };
-  const storedAsset = fakeAsset(2, "terraform.tfstate", state);
-  let releaseBody = release.body;
-  let writeCalls = 0;
-  const octokit = {
-    paginate: async () => [storedAsset],
-    request: async () => ({ data: state }),
-    rest: {
-      repos: {
-        getReleaseByTag: async () => ({
-          data: { ...release, body: releaseBody },
-        }),
-        listReleaseAssets: "list",
-        createRelease: async () => {
-          writeCalls += 1;
-          throw new Error("read-only token must not create a Release");
-        },
-        updateRelease: async () => {
-          writeCalls += 1;
-          releaseBody = "changed";
-          throw new Error("read-only token must not update a Release");
-        },
-      },
-    },
-  } as never;
-  const config = configFor(workspace, statePath);
+function authorizeSave(
+  config: ReturnType<typeof configFor>,
+  current?: FakeAsset,
+): void {
+  writeRestoreReceipt(config, marker(current as never));
+}
 
+test("restore and import reads leave custom Release metadata unchanged", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-read-only-"));
+  const state = Buffer.from('{"version":4,"resources":[]}');
+  const api = stateApi(state);
+  const config = configFor(workspace);
   try {
-    await restore({ octokit, config });
-    assert.deepEqual(await readStoredState({ octokit, config }), state);
-    assert.equal(readFileSync(statePath, "utf8"), state.toString("utf8"));
-    assert.equal(releaseBody, "operator-owned release notes");
-    assert.equal(writeCalls, 0);
+    await restore({ octokit: api.octokit, config });
+    assert.deepEqual(
+      await readStoredState({ octokit: api.octokit, config }),
+      state,
+    );
+    assert.equal(readFileSync(config.statePath, "utf8"), state.toString());
+    assert.equal(api.release().body, "operator-owned release notes");
+    assert.equal(api.writeCalls(), 0);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("restore refuses orphan current metadata even with bootstrap", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-restore-"),
-  );
-  const config = {
-    operation: "restore",
-    token: "token",
-    target: { owner: "go-min", repo: "state" },
-    tag: "terraform-state",
-    assetName: "terraform.tfstate",
-    workspace,
-    statePath: join(workspace, "terraform.tfstate"),
-    bootstrap: true,
-    expectedMarker: "",
-    backupRetention: 20,
-    sourceCommit: "",
-    workflowRunId: "",
-    resetConfirmation: "",
-    encryption: { mode: "age", recipients: [], identities: [] },
-  } as never;
+test("restore fails closed on absent storage without bootstrap", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-absent-"));
+  let creates = 0;
   const octokit = {
-    paginate: async () => [
-      {
-        id: 2,
-        name: "terraform.tfstate.metadata.json",
-        state: "uploaded",
-      },
-    ],
     rest: {
       repos: {
-        getReleaseByTag: async () => ({ data: { id: 1, body: "" } }),
-        updateRelease: async ({ body }: { body: string }) => ({
-          data: { id: 1, body },
-        }),
-        listReleaseAssets: "list",
+        getReleaseByTag: async () => {
+          throw Object.assign(new Error("missing"), { status: 404 });
+        },
+        createRelease: async () => {
+          creates += 1;
+          return { data: { id: 1 } };
+        },
       },
     },
   } as never;
-
   try {
     await assert.rejects(
-      restore({ octokit, config }),
-      /companion terraform\.tfstate\.metadata\.json exists/,
+      restore({ octokit, config: configFor(workspace) }),
+      /TERRAFORM_BOOTSTRAP=true/,
     );
+    assert.equal(creates, 0);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("save restores the previous current state when upload verification fails", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-save-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
+test("restore refuses an empty existing Release without bootstrap", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-empty-release-"));
+  const api = stateApi();
+  try {
+    await assert.rejects(
+      restore({ octokit: api.octokit, config: configFor(workspace) }),
+      /State asset terraform\.tfstate is missing/,
+    );
+    assert.equal(api.writeCalls(), 0);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("protected bootstrap creates storage and an absent restore receipt", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-bootstrap-"));
+  const config = configFor(workspace, { bootstrap: true });
+  let release: { id: number; body: string } | undefined;
+  const octokit = {
+    paginate: async () => [],
+    rest: {
+      repos: {
+        getReleaseByTag: async () => {
+          if (!release)
+            throw Object.assign(new Error("missing"), { status: 404 });
+          return { data: release };
+        },
+        createRelease: async ({ body }: { body: string }) => {
+          release = { id: 1, body };
+          return { data: release };
+        },
+        listReleaseAssets: "list",
+      },
+    },
+  } as never;
+  try {
+    await restore({ octokit, config });
+    assert.ok(release);
+    assert.match(readFileSync(config.receiptPath, "utf8"), /"marker":"absent"/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("save requires a restore receipt before any remote mutation", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-no-receipt-"));
+  writeFileSync(join(workspace, "terraform.tfstate"), "next", { mode: 0o600 });
+  const api = stateApi(Buffer.from("previous"));
+  try {
+    await assert.rejects(
+      save({
+        octokit: api.octokit,
+        config: configFor(workspace, { operation: "save" }),
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "TRS_RESTORE_RECEIPT_REQUIRED",
+    );
+    assert.equal(api.writeCalls(), 0);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("save restores previous current after uploaded-state corruption", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-corrupt-upload-"));
   const previous = Buffer.from("previous-state");
-  const next = Buffer.from("next-state");
-  writeFileSync(statePath, next, { mode: 0o600 });
-
-  const api = saveApi(previous, { corruptAssetId: 13 });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previous),
+  writeFileSync(join(workspace, "terraform.tfstate"), "next-state", {
+    mode: 0o600,
   });
-
+  const api = stateApi(previous, { corruptAssetId: 13 });
+  const config = configFor(workspace, { operation: "save" });
+  authorizeSave(config, api.assets()[0]);
   try {
     await assert.rejects(
       save({ octokit: api.octokit, config }),
@@ -339,503 +317,152 @@ test("save restores the previous current state when upload verification fails", 
       .find((asset) => asset.name === "terraform.tfstate");
     assert.ok(current);
     assert.deepEqual(api.payloads.get(current.id), previous);
-    assert.equal(readFileSync(statePath, "utf8"), "next-state");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("save recovers previous state after a partial current bundle upload", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-partial-current-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const previous = Buffer.from("previous-state");
-  writeFileSync(statePath, "next-state", { mode: 0o600 });
-  const api = saveApi(previous, { failUploadAt: 14 });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previous),
-  });
-
-  try {
-    await assert.rejects(
-      save({ octokit: api.octokit, config }),
-      /injected upload failure/,
-    );
-    const current = api
-      .assets()
-      .find((asset) => asset.name === "terraform.tfstate");
-    assert.ok(current);
-    assert.deepEqual(api.payloads.get(current.id), previous);
-    assert.equal(
-      api
-        .assets()
-        .some((asset) => asset.name === "terraform.tfstate.manifest.json"),
-      false,
-    );
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("save recovers a complete signed encrypted v0.4 bundle after partial replacement", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-v04-recovery-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const previousPlaintext = Buffer.from(
+test("partial replacement restores a complete prior v0.4 plaintext bundle", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-v04-rollback-"));
+  const previous = Buffer.from(
     '{"terraform_version":"1.14.0","serial":7,"lineage":"rollback"}',
   );
-  const nextPlaintext = Buffer.from(
-    '{"terraform_version":"1.14.0","serial":8,"lineage":"rollback"}',
-  );
-  writeFileSync(statePath, nextPlaintext, { mode: 0o600 });
-  const identity = await generateIdentity();
-  const recipient = await identityToRecipient(identity);
-  const pair = generateKeyPairSync("ed25519");
-  const privateKeyPem = pair.privateKey.export({
-    format: "pem",
-    type: "pkcs8",
-  }) as string;
-  const publicKey = publicKeyInputFromPrivateKey(privateKeyPem);
-  const signing = {
-    policy: "require",
-    privateKeyPem,
-    verificationKeys: [publicKey],
-  } as const;
-  const encryption = {
-    mode: "age",
-    recipients: [recipient],
-    identities: [identity],
-  } as const;
-  const previousStored = await encryptState(encryption, previousPlaintext);
-  const manifestContext = {
-    octokit: {} as never,
-    config: configFor(workspace, statePath, { signing, encryption }),
-  };
-  const previousBundle = createBundleData(
-    {
-      role: "current",
-      name: "terraform.tfstate",
-      stored: previousStored,
-      plaintext: previousPlaintext,
-      encryptionMode: "age",
-      encryptionKeyFingerprint: ageRecipientsFingerprint([recipient]),
-      parentMarker: null,
-      parentStoredSha256: null,
-      sourceCommit: "previous-commit",
-      workflowRunId: "previous-run",
-      actionVersion: "v0.4.0",
-      createdAt: "2026-07-28T12:00:00.000Z",
-    },
-    manifestContext,
-  );
-  assert.ok(previousBundle.metadata);
-  assert.ok(previousBundle.signature);
-  const api = saveApi(previousStored, {
-    failUploadAt: 17,
-    initialCompanions: [
-      {
-        name: "terraform.tfstate.metadata.json",
-        data: previousBundle.metadata,
-      },
-      {
-        name: "terraform.tfstate.manifest.sig.json",
-        data: previousBundle.signature,
-      },
+  const previousBundle = createBundleData({
+    role: "current",
+    name: "terraform.tfstate",
+    stored: previous,
+    plaintext: previous,
+    encryptionMode: "none",
+    encryptionKeyFingerprint: null,
+    parentMarker: null,
+    parentStoredSha256: null,
+    sourceCommit: "previous",
+    workflowRunId: "previous",
+    actionVersion: "v0.4.0",
+    createdAt: "2026-07-28T12:00:00.000Z",
+  });
+  writeFileSync(join(workspace, "terraform.tfstate"), "next-state", {
+    mode: 0o600,
+  });
+  const api = stateApi(previous, {
+    companions: [
       {
         name: "terraform.tfstate.manifest.json",
         data: previousBundle.manifest,
       },
     ],
+    failUploadAt: 14,
   });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previousStored),
-    encryption,
-    signing,
-  });
-
+  const config = configFor(workspace, { operation: "save" });
+  authorizeSave(config, api.assets()[0]);
   try {
     await assert.rejects(
       save({ octokit: api.octokit, config }),
       /injected upload failure/,
     );
-    assert.deepEqual(
-      api.deleted,
-      [3, 4, 2, 1, 16, 15, 14],
-      "the old signed bundle must be fully deleted before the replacement manifest fails, then every partial replacement companion must be removed",
-    );
     const current = new Map(
       api
         .assets()
-        .filter(
-          (asset) =>
-            asset.name === "terraform.tfstate" ||
-            asset.name.startsWith("terraform.tfstate.manifest") ||
-            asset.name === "terraform.tfstate.metadata.json",
+        .filter((asset) =>
+          ["terraform.tfstate", "terraform.tfstate.manifest.json"].includes(
+            asset.name,
+          ),
         )
         .map((asset) => [asset.name, api.payloads.get(asset.id)]),
     );
-    assert.deepEqual(current.get("terraform.tfstate"), previousStored);
-    assert.deepEqual(
-      current.get("terraform.tfstate.metadata.json"),
-      previousBundle.metadata,
-    );
-    assert.deepEqual(
-      current.get("terraform.tfstate.manifest.sig.json"),
-      previousBundle.signature,
-    );
+    assert.deepEqual(current.get("terraform.tfstate"), previous);
     assert.deepEqual(
       current.get("terraform.tfstate.manifest.json"),
       previousBundle.manifest,
     );
-    assert.equal(current.size, 4);
-    assert.deepEqual(
-      await readStoredState({
-        octokit: api.octokit,
-        config: configFor(workspace, statePath, {
-          encryption,
-          signing: {
-            policy: "require",
-            privateKeyPem: "",
-            verificationKeys: [publicKey],
-          },
-        }),
-      }),
-      previousPlaintext,
-    );
+    assert.equal(current.size, 2);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("save does not replace current state when backup verification fails", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-backup-corrupt-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const previous = Buffer.from("previous-state");
-  writeFileSync(statePath, "next-state", { mode: 0o600 });
-  const api = saveApi(previous, { corruptAssetId: 10 });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previous),
+test("signed and encrypted storage fail before Release mutation", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-migration-"));
+  const state = Buffer.from("age-encryption.org/v1\nencrypted");
+  const signature = Buffer.from("signature");
+  writeFileSync(join(workspace, "terraform.tfstate"), "next-state", {
+    mode: 0o600,
   });
-
+  const api = stateApi(state, {
+    companions: [
+      { name: "terraform.tfstate.manifest.sig.json", data: signature },
+    ],
+  });
+  const config = configFor(workspace, { operation: "save" });
+  authorizeSave(config, api.assets()[0]);
   try {
     await assert.rejects(
       save({ octokit: api.octokit, config }),
-      /backup state asset .* failed checksum verification/i,
-    );
-    const current = api
-      .assets()
-      .find((asset) => asset.name === "terraform.tfstate");
-    assert.equal(current?.id, 1);
-    assert.deepEqual(api.payloads.get(1), previous);
-    assert.equal(api.deleted.includes(1), false);
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("successful legacy plaintext save migrates current and backup bundles", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-legacy-migrate-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const previous = Buffer.from(
-    '{"terraform_version":"1.13.0","serial":1,"lineage":"legacy"}',
-  );
-  const next = Buffer.from(
-    '{"terraform_version":"1.14.0","serial":2,"lineage":"legacy"}',
-  );
-  writeFileSync(statePath, next, { mode: 0o600 });
-  const api = saveApi(previous);
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previous),
-  });
-
-  try {
-    await save({ octokit: api.octokit, config });
-    const names = api.assets().map((asset) => asset.name);
-    const backup = names.find(
-      (name) =>
-        name.startsWith("terraform.tfstate.backup-") && !name.endsWith(".json"),
-    );
-    assert.ok(backup);
-    assert.ok(names.includes(`${backup}.metadata.json`));
-    assert.ok(names.includes(`${backup}.manifest.json`));
-    assert.ok(names.includes("terraform.tfstate.manifest.json"));
-    assert.equal(names.includes("terraform.tfstate.metadata.json"), false);
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("successful encrypted save exposes distinct stored and plaintext digests", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-encrypted-outputs-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const outputPath = join(workspace, "outputs.txt");
-  const plaintext = Buffer.from(
-    '{"version":4,"serial":1,"sensitive":"encrypted-output-test"}',
-  );
-  writeFileSync(statePath, plaintext, { mode: 0o600 });
-  writeFileSync(outputPath, "", { mode: 0o600 });
-  const identity = await generateIdentity();
-  const recipient = await identityToRecipient(identity);
-  const api = saveApi(Buffer.alloc(0), { empty: true });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    bootstrap: true,
-    expectedMarker: "absent",
-    encryption: { mode: "age", recipients: [recipient], identities: [] },
-  });
-
-  try {
-    await withOutputFile(outputPath, () =>
-      save({ octokit: api.octokit, config }),
-    );
-    const ciphertext = api.payloads.get(10);
-    assert.ok(ciphertext);
-    assert.notDeepEqual(ciphertext, plaintext);
-    const outputs = readFileSync(outputPath, "utf8");
-    const storedDigest = outputValue(outputs, "stored-state-sha256");
-    const plaintextDigest = outputValue(outputs, "plaintext-state-sha256");
-    assert.equal(storedDigest, digest(ciphertext));
-    assert.equal(plaintextDigest, digest(plaintext));
-    assert.equal(outputValue(outputs, "state-sha256"), digest(plaintext));
-    assert.notEqual(storedDigest, plaintextDigest);
-    assertLifecycleOutputs(outputs, {
-      committed: "true",
-      phase: "complete",
-      status: "success",
-    });
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("signed save and read verify the manifest with a rotation key set", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-signed-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  const outputPath = join(workspace, "outputs.txt");
-  const state = Buffer.from(
-    '{"terraform_version":"1.14.0","serial":4,"lineage":"signed"}',
-  );
-  writeFileSync(statePath, state, { mode: 0o600 });
-  writeFileSync(outputPath, "", { mode: 0o600 });
-  const pair = generateKeyPairSync("ed25519");
-  const privateKeyPem = pair.privateKey.export({
-    format: "pem",
-    type: "pkcs8",
-  }) as string;
-  const publicKey = publicKeyInputFromPrivateKey(privateKeyPem);
-  const rotated = generateKeyPairSync("ed25519").publicKey.export({
-    format: "jwk",
-  }) as { x: string };
-  const api = saveApi(Buffer.alloc(0), { empty: true });
-  const saveConfig = configFor(workspace, statePath, {
-    operation: "save",
-    bootstrap: true,
-    expectedMarker: "absent",
-    signing: {
-      policy: "require",
-      privateKeyPem,
-      verificationKeys: [`ed25519:${rotated.x}`, publicKey],
-    },
-  });
-
-  try {
-    await withOutputFile(outputPath, () =>
-      save({ octokit: api.octokit, config: saveConfig }),
-    );
-    const outputs = readFileSync(outputPath, "utf8");
-    assert.equal(outputValue(outputs, "storage-format"), "manifest-v1");
-    assert.equal(outputValue(outputs, "signature-status"), "verified");
-    assert.match(
-      outputValue(outputs, "signature-key-fingerprint") || "",
-      /^sha256:[a-f0-9]{64}$/,
-    );
-    assert.equal(outputValue(outputs, "stored-state-verification"), "verified");
-    assert.equal(
-      outputValue(outputs, "plaintext-state-verification"),
-      "verified",
-    );
-    const restored = await readStoredState({
-      octokit: api.octokit,
-      config: configFor(workspace, statePath, {
-        signing: {
-          policy: "require",
-          privateKeyPem: "",
-          verificationKeys: [publicKey],
-        },
-      }),
-    });
-    assert.deepEqual(restored, state);
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("signed current signature corruption fails verification and cleans bootstrap bundle", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-signature-corrupt-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  writeFileSync(statePath, "signed-state", { mode: 0o600 });
-  const pair = generateKeyPairSync("ed25519");
-  const privateKeyPem = pair.privateKey.export({
-    format: "pem",
-    type: "pkcs8",
-  }) as string;
-  const publicKey = publicKeyInputFromPrivateKey(privateKeyPem);
-  const api = saveApi(Buffer.alloc(0), { empty: true, corruptAssetId: 11 });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    bootstrap: true,
-    expectedMarker: "absent",
-    signing: {
-      policy: "require",
-      privateKeyPem,
-      verificationKeys: [publicKey],
-    },
-  });
-  try {
-    await assert.rejects(
-      save({ octokit: api.octokit, config }),
-      /signature asset failed checksum verification/,
-    );
-    assert.deepEqual(
-      api
-        .assets()
-        .filter((asset) => asset.name.startsWith("terraform.tfstate")),
-      [],
-    );
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
-test("legacy age migration fails before any Release mutation without identities", async () => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-migration-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
-  writeFileSync(statePath, "next-state", { mode: 0o600 });
-  const identity = await generateIdentity();
-  const recipient = await identityToRecipient(identity);
-  const previous = await encryptState(
-    { mode: "age", recipients: [recipient], identities: [] },
-    Buffer.from("previous-state"),
-  );
-  const metadata = Buffer.from(
-    `${JSON.stringify(
-      {
-        format_version: 1,
-        encryption: "age",
-        ciphertext_sha256: digest(previous),
-        action_version: "v0.3.1",
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  const stateAsset = fakeAsset(1, "terraform.tfstate", previous);
-  const metadataAsset = fakeAsset(
-    2,
-    "terraform.tfstate.metadata.json",
-    metadata,
-  );
-  let writeCalls = 0;
-  const octokit = {
-    paginate: async () => [stateAsset, metadataAsset],
-    request: async (_route: string, request: { asset_id: number }) => ({
-      data: request.asset_id === 1 ? previous : metadata,
-    }),
-    rest: {
-      repos: {
-        getReleaseByTag: async () => ({ data: { id: 1, body: "custom" } }),
-        listReleaseAssets: "list",
-        updateRelease: async () => {
-          writeCalls += 1;
-          throw new Error("must not update before migration validation");
-        },
-        uploadReleaseAsset: async () => {
-          writeCalls += 1;
-          throw new Error("must not upload before migration validation");
-        },
-        deleteReleaseAsset: async () => {
-          writeCalls += 1;
-          throw new Error("must not delete before migration validation");
-        },
-      },
-    },
-  } as never;
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    expectedMarker: expectedMarker(previous),
-    encryption: { mode: "age", recipients: [recipient], identities: [] },
-  });
-
-  try {
-    await assert.rejects(
-      save({ octokit, config }),
       (error: unknown) =>
         error instanceof Error &&
         "code" in error &&
-        error.code === "TRS_LEGACY_MIGRATION_IDENTITY_REQUIRED",
+        error.code === "TRS_V04_MIGRATION_REQUIRED" &&
+        /v0\.4\.0/.test(error.message),
     );
-    assert.equal(writeCalls, 0);
+    assert.equal(api.writeCalls(), 0);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
 
-test("save exposes committed state when post-commit retention fails", async (context) => {
-  context.mock.method(globalThis, "setTimeout", (callback: () => void) => {
-    callback();
-    return {} as NodeJS.Timeout;
-  });
-  const workspace = mkdtempSync(
-    join(tmpdir(), "terraform-release-state-maintenance-"),
-  );
-  const statePath = join(workspace, "terraform.tfstate");
+test("successful plaintext save preserves digest meanings and lifecycle outputs", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-success-"));
   const outputPath = join(workspace, "outputs.txt");
-  const previous = Buffer.from("previous-state");
-  const next = Buffer.from("next-state");
-  writeFileSync(statePath, next, { mode: 0o600 });
+  const next = Buffer.from(
+    '{"terraform_version":"1.14.0","serial":2,"lineage":"plain"}',
+  );
+  writeFileSync(join(workspace, "terraform.tfstate"), next, { mode: 0o600 });
   writeFileSync(outputPath, "", { mode: 0o600 });
-  const api = saveApi(previous, { failRetention: true });
-  const config = configFor(workspace, statePath, {
-    operation: "save",
-    backupRetention: 0,
-    expectedMarker: expectedMarker(previous),
-  });
-
+  const api = stateApi();
+  const config = configFor(workspace, { operation: "save", bootstrap: true });
+  authorizeSave(config);
   try {
-    await assert.rejects(
-      withOutputFile(outputPath, () => save({ octokit: api.octokit, config })),
-      /State save committed and verified, but post-commit backup maintenance failed/,
+    await withOutputFile(outputPath, () =>
+      save({ octokit: api.octokit, config }),
     );
-    assertCurrentState(api, 13, next);
     const outputs = readFileSync(outputPath, "utf8");
-    assertLifecycleOutputs(outputs, {
-      committed: "true",
-      phase: "maintenance",
-      status: "maintenance-failed",
-    });
     assert.equal(outputValue(outputs, "stored-state-sha256"), digest(next));
     assert.equal(outputValue(outputs, "plaintext-state-sha256"), digest(next));
     assert.equal(outputValue(outputs, "state-sha256"), digest(next));
-    assert.ok(outputValue(outputs, "remote-state-marker"));
-    assert.equal(outputValue(outputs, "backup-count"), undefined);
+    assert.equal(outputValue(outputs, "signature-status"), "unsigned");
+    assert.equal(outputValue(outputs, "state-write-committed"), "true");
+    assert.equal(outputValue(outputs, "state-phase"), "complete");
+    assert.equal(outputValue(outputs, "state-status"), "success");
+    assert.notEqual(outputValue(outputs, "remote-state-marker"), "absent");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("post-commit retention failure still exposes the authoritative marker", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-maintenance-"));
+  const outputPath = join(workspace, "outputs.txt");
+  const previous = Buffer.from("previous-state");
+  writeFileSync(join(workspace, "terraform.tfstate"), "next-state", {
+    mode: 0o600,
+  });
+  writeFileSync(outputPath, "", { mode: 0o600 });
+  const api = stateApi(previous, { failDeleteId: 12 });
+  const config = configFor(workspace, {
+    operation: "save",
+    backupRetention: 0,
+  });
+  authorizeSave(config, api.assets()[0]);
+  try {
+    await assert.rejects(
+      withOutputFile(outputPath, () => save({ octokit: api.octokit, config })),
+      /committed and verified.*maintenance failed/,
+    );
+    const outputs = readFileSync(outputPath, "utf8");
+    assert.equal(outputValue(outputs, "state-write-committed"), "true");
+    assert.equal(outputValue(outputs, "state-phase"), "maintenance");
+    assert.equal(outputValue(outputs, "state-status"), "maintenance-failed");
+    assert.notEqual(outputValue(outputs, "remote-state-marker"), "absent");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

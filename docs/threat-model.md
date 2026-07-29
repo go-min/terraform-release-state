@@ -1,72 +1,64 @@
 # Threat model
 
-## Security boundary
+## Boundary
 
-Protected assets are Terraform state, manifests, signatures, backup metadata,
-age identities, signing private keys, GitHub tokens, consistency markers, and
-the managed Release namespace. The action
-trusts the reviewed workflow, runner, and explicitly granted token. It treats
-paths, API results after ambiguous failures, remote assets, and concurrent
-writers as untrusted.
+Protected assets are plaintext Terraform state, canonical manifests, backup
+metadata, consistency receipts, GitHub tokens, and the fixed Release namespace.
+The action trusts the reviewed workflow, GitHub-hosted runner, current
+repository context, and explicitly granted token. Remote API results,
+filesystem paths, concurrent writers, and generated import branches are
+untrusted.
 
 ## Controls
 
-| Threat                                   | Control                                                                                                  |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| State or credential disclosure           | No state/key outputs; masked secrets; escaped workflow commands                                          |
-| Path traversal or symlink escape         | Workspace containment, real-directory checks, regular files only                                         |
-| Corrupt or substituted state             | Strict manifests, stored/plaintext SHA-256 and size bindings, optional Ed25519 verification              |
-| Stale concurrent writer                  | Consumer concurrency plus restore/save marker checks                                                     |
-| Accidental empty-state recreation        | Explicit bootstrap; access errors remain failures                                                        |
-| Partial replacement or backup corruption | Download every new bundle object before replacement; compensation; signature-first fail-closed retention |
-| Over-broad reset                         | Exact confirmation, namespace audit, post-delete verification                                            |
-| Ambiguous API mutation                   | Reconcile expected remote content before accepting success                                               |
-| Import branch overwrite or race          | Full tree diff, generated-path allowlist, expected head, non-force ref                                   |
-| Duplicate Terraform import target        | Structural HCL scan and explicit collision suppression                                                   |
-| Import path symlink or realpath escape   | Lexical plus realpath containment; PR mode avoids local import reads                                     |
-| Dependency compromise                    | Lockfile, pinned actions, dependency review, CodeQL, Dependabot                                          |
+| Threat                            | Control                                                                            |
+| --------------------------------- | ---------------------------------------------------------------------------------- |
+| State or credential disclosure    | No state/token outputs; secret masking; escaped workflow commands                  |
+| Cross-repository confused deputy  | Repository derived only from `github.context.repo`                                 |
+| Path traversal or symlink escape  | Fixed root paths plus lexical, realpath, and regular-file checks                   |
+| Corrupt or substituted state      | Strict canonical manifest and stored/plaintext SHA-256 plus size bindings          |
+| Stale concurrent writer           | Protected workflow concurrency and repository-bound restore receipt CAS            |
+| Accidental empty-state recreation | Exact `TERRAFORM_BOOTSTRAP=true` environment boundary                              |
+| Partial upload/replacement        | Download verification, manifest-last completion, compensating rollback             |
+| Unsafe legacy downgrade           | Encrypted/signed objects fail before mutation with v0.4 migration guidance         |
+| Over-broad reset                  | Fixed namespace, workflow-owned confirmation, exact backup-name validation         |
+| Backup promotion race             | Current and selected bundle markers rechecked after verified safety backup         |
+| Import overwrite                  | Full merge-base tree diff, one-path allowlist, expected SHA, non-force ref update  |
+| Duplicate import target           | Structural HCL tokenizer/parser and explicit suppression                           |
+| Dependency compromise             | Frozen lockfile policy, pinned actions/toolchain, audit, dependency review, CodeQL |
 
-Age encryption uses native X25519 recipients. Identities remain masked and in
-memory; plaintext state is not written to outputs, logs, artifacts, or caches.
-Digest outputs contain only hashes: `stored-state-sha256` covers stored bytes
-and `plaintext-state-sha256` covers decrypted state. Existing `state-digest`
-and `state-sha256` meanings remain compatible.
+`state-sha256` and `plaintext-state-sha256` cover plaintext. The v0.5 stored
+bytes are the plaintext bytes, so `stored-state-sha256` is equal. Digests are
+not state values, but state may still contain secrets and requires repository
+access controls appropriate for plaintext storage.
 
-Manifest and signature assets are canonicalized and strictly validated; unknown
-or reordered fields, unsupported schema versions, object-name mismatches,
-unknown signing keys, and signature failures stop the operation. A present
-manifest is never ignored in favor of legacy metadata. The age recipient-set
-fingerprint and Ed25519 public-key fingerprint are non-secret SHA-256
-identifiers. Terraform lineage may be recorded because it is an infrastructure
-correlation identifier; state resources, outputs, provider data, and plaintext
-values are not copied into manifests or action outputs.
+Terraform lineage may appear in a manifest because it is an infrastructure
+correlation identifier. Resource values, Terraform outputs, provider data, and
+credentials are never copied into manifests, workflow summaries, or action
+outputs.
 
-The default signature policy permits unsigned legacy migration with an explicit
-warning. Signed objects never degrade to unverifiable reads: even under
-`allow-unsigned`, a present signature requires a matching configured public
-key. `require` rejects unsigned state and requires save to sign new objects.
+The receipt is stored beneath trusted `RUNNER_TEMP`, uses a deterministic
+repository binding and mode 0600, and is accepted only as canonical internal
+JSON. It cannot be supplied through the action API. A compromised runner can
+still read state and the receipt; filesystem checks do not make an untrusted
+self-hosted runner safe.
 
-Import proposals are read-only unless explicit PR mode is enabled. PR mode
-writes only the configured imports file, never Terraform state. Generated
-import IDs can be sensitive, so protect the target repository and review the PR.
-The scan excludes the generated output and Terraform/tool cache directories;
-malformed import blocks and symbolic links in the scanned tree fail closed.
-The configured root cannot be a symlink or traverse symlink components. Local
-`imports-path` content is read only in diff-only mode after regular-file,
-non-symlink, and realpath containment checks; PR mode uses the remote base.
+Import always writes a same-repository pull request and can expose provider
+import IDs to repository readers. Protect the repository and review every
+generated target and plan. The action does not run Terraform.
 
 ## Residual risks
 
-- Release replacement is not atomic and does not provide locking or
-  transactions.
-- Plain state may contain secrets and depends on repository access controls.
-- A lost age identity makes encrypted state and matching backups unrecoverable.
-- A lost Ed25519 verification key makes objects signed only by that key
-  unverifiable under the required policy.
-- A compromised workflow or runner can read plaintext state and supplied
-  credentials.
-- Filesystem checks cannot make an untrusted self-hosted runner safe.
+- GitHub Release replacement is not atomic and is not backend locking.
+- A compromised protected workflow or runner can read or replace plaintext
+  state using its granted permissions.
+- GitHub API availability can leave post-commit retention incomplete; committed
+  outputs distinguish this from replacement failure.
+- Workflow-level reset confirmation and environment protection are outside the
+  action boundary.
+- A lost v0.4 identity or verification key can make encrypted/signed historical
+  storage unrecoverable before migration.
 
-Use least-privilege credentials, a shared concurrency group with
-`cancel-in-progress: false`, reviewed workflows, and protected recovery
-environments.
+Use least-privilege `GITHUB_TOKEN` permissions, a shared concurrency group with
+`cancel-in-progress: false`, reviewed workflow changes, and protected bootstrap
+and reset environments.

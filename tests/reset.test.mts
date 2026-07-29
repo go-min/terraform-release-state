@@ -13,11 +13,11 @@ const config = {
   assetName: "terraform.tfstate",
   statePath: "/workspace/unused",
   bootstrap: false,
-  expectedMarker: "",
+  receiptPath: "/runner/receipt.json",
   backupRetention: 20,
   sourceCommit: "",
   workflowRunId: "",
-  resetConfirmation: "RESET",
+  resetTarget: "all",
 } as never;
 
 const asset = (id: number, name: string) =>
@@ -105,7 +105,12 @@ test("reset deletes assets, release, and tag through the client", async () => {
       calls.push(`tag:${tag}`);
     },
   });
-  assert.deepEqual(result, { deletedAssetCount: 2, releaseFound: true });
+  assert.deepEqual(result, {
+    deletedAssetCount: 2,
+    releaseFound: true,
+    action: "deleted",
+    target: "all",
+  });
   assert.deepEqual(calls, [
     "asset:1",
     "asset:2",
@@ -164,6 +169,31 @@ test("reset fails closed before deleting when release has unrelated assets", asy
   assert.deepEqual(calls, []);
 });
 
+test("reset runs compatibility preflight before the first deletion", async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    resetWithClient({ config } as never, {
+      getRelease: async () => release,
+      listAssets: async () => [asset(1, "terraform.tfstate")],
+      beforeDelete: async () => {
+        calls.push("preflight");
+        throw new Error("migration required");
+      },
+      deleteAsset: async () => {
+        calls.push("asset");
+      },
+      deleteRelease: async () => {
+        calls.push("release");
+      },
+      deleteTag: async () => {
+        calls.push("tag");
+      },
+    }),
+    /migration required/,
+  );
+  assert.deepEqual(calls, ["preflight"]);
+});
+
 test("reset is idempotent when the release is already absent", async () => {
   const calls: string[] = [];
   const result = await resetWithClient({ config } as never, {
@@ -179,7 +209,12 @@ test("reset is idempotent when the release is already absent", async () => {
       calls.push("tag");
     },
   });
-  assert.deepEqual(result, { deletedAssetCount: 0, releaseFound: false });
+  assert.deepEqual(result, {
+    deletedAssetCount: 0,
+    releaseFound: false,
+    action: "unchanged",
+    target: "all",
+  });
   assert.deepEqual(calls, ["tag"]);
 });
 

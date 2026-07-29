@@ -1,45 +1,49 @@
 # Contributing
 
-> [!IMPORTANT]
-> This project is maintained primarily for the organization's own use.
->
-> - It is not actively seeking public contributions.
-> - There is no review or merge timeline.
-> - Forks are welcome for different workflows or priorities.
+This project is maintained primarily for the `go-min` protected Terraform
+workflow. Forks are welcome, but v0.5 intentionally does not offer generic
+repository, path, encryption, signing, or retention configuration.
 
 ## Development
 
+Use Node.js 24 and the pinned pnpm toolchain without bypassing the workspace
+supply-chain policy.
+
 ```bash
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm format:check
 pnpm lint
+pnpm audit --audit-level high
+pnpm typecheck
+pnpm test
 pnpm build
+git diff --exit-code -- dist
+git diff --check
 ```
 
-Use Node.js 24, TypeScript `.mts`, the Node.js native test runner, and Biome. Do
-not add a test framework. Commit the generated `dist/` bundle whenever source
-changes affect runtime behavior.
+Source uses TypeScript `.mts`, the Node.js native test runner, Biome, and
+Prettier. Runtime changes must include a reproducibly rebuilt `dist/index.js`.
 
 ## Change requirements
 
-- Preserve optimistic consistency and fail-closed bootstrap behavior.
-- Never log or output state, credentials, tokens, or private keys.
-- Keep state paths workspace-relative and preserve the flat manifest,
-  signature, and compatibility-metadata bundle naming contract.
-- Pin dependency changes in both `package.json` and `pnpm-lock.yaml`.
-- Use disposable Release tags for integration tests and always clean them up.
-- Document public API, state format, encryption, and recovery changes.
+- Keep public inputs exactly `operation`, `github-token`, and `reset-target`.
+- Preserve the fixed same-repository namespace and root `terraform.tfstate`.
+- Preserve read-only existing restore/import behavior.
+- Preserve receipt-based optimistic consistency and fail-closed bootstrap.
+- Verify every new backup/current upload before it is accepted.
+- Upload manifests last and fault-test every replacement rollback stage.
+- Never log/output state, credentials, tokens, or Terraform values.
+- Keep import generation fixed under `terraform` and protect its branch with
+  full-diff and expected-SHA checks.
+- Keep package and lockfile changes synchronized.
+- Update public API, architecture, recovery, threat, and release documentation.
 
-Release, publication, and production integration changes require explicit
-maintainer approval. Use Conventional Commit prefixes (`feat:`, `fix:`,
-`docs:`, `chore:`, `refactor:`, `test:`, `ci:`, or `build:`). After changes
-reach `main`, release-please creates or updates a Release PR with the version,
-`package.json`, and `CHANGELOG.md` changes. Merge that PR only after its normal
-checks pass; release-please then creates the GitHub Release and tag.
+Reset confirmation remains workflow-owned. Do not add it back as an action
+input. Release-candidate integration keeps the deterministic local GitHub API
+fixture for fault injection, then exercises the fixed live `terraform-state`
+namespace only after proving it absent and atomically claiming its tag at the
+exact candidate SHA. Cleanup is ownership-guarded and must leave both the
+Release and tag absent.
 
-Release automation uses the `release-please` GitHub Environment and a
-short-lived GitHub App installation token configured through its
-`RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret. Do not
-publish a release by manually creating or moving tags.
+Use Conventional Commit titles. Release Please owns version, changelog, tag,
+and GitHub Release creation; do not manually create or move release tags.

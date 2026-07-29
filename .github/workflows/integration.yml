@@ -1,4 +1,4 @@
-name: Disposable integration
+name: Release candidate integration
 
 on:
   workflow_call:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-release-state-disposable-integration
+  group: terraform-release-state-release-candidate-integration
   cancel-in-progress: false
 
 jobs:
@@ -17,11 +17,8 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      STATE_TEST_TAG: terraform-state-integration-${{ github.run_id }}-${{ github.run_attempt }}
-      STATE_TEST_PATH: test-state/terraform.tfstate
     steps:
-      - name: Checkout
+      - name: Checkout exact release candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -44,322 +41,172 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Create disposable state directory
-        run: mkdir -p test-state
+      - name: Build exact candidate
+        run: pnpm build
 
-      - name: Restore missing state with explicit bootstrap
-        id: restore-empty
-        uses: ./
-        with:
-          operation: restore
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          bootstrap: "true"
+      - name: Verify compiled bundle is current
+        run: git diff --exit-code -- dist
 
-      - name: Verify service Release description
+      - name: Run deterministic action-boundary integration
+        run: node tests/integration-action.mjs
+
+      - name: Assert fixed live namespace is absent
+        id: preflight
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_body=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.body')
-          grep -qF '> [!CAUTION]' <<< "$release_body"
-          grep -qF 'Service release for Terraform state; do not delete.' <<< "$release_body"
-          grep -qF 'github.com/go-min/terraform-release-state' <<< "$release_body"
+          api_status() {
+            local endpoint=$1
+            local output=$2
+            curl --silent --show-error --output "$output" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
+          }
 
-      - name: Create initial disposable state
-        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":1,"lineage":"integration"}' > "$STATE_TEST_PATH"
-
-      - name: Save bootstrapped state
-        id: save-initial
-        uses: ./
-        with:
-          operation: save
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          bootstrap: "true"
-          expected-remote-state-marker: ${{ steps.restore-empty.outputs.remote-state-marker }}
-          backup-retention: "1"
-
-      - name: Require explicit bootstrap output
-        if: steps.save-initial.outputs.bootstrapped != 'true'
-        run: exit 1
-
-      - name: Restore current state
-        id: restore-current
-        uses: ./
-        with:
-          operation: restore
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-
-      - name: Simulate updated Terraform state
-        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
-
-      - name: Prepare concurrent remote state
-        run: |
-          cp "$STATE_TEST_PATH" "$RUNNER_TEMP/stale-local.tfstate"
-          printf '%s\n' '{"version":4,"terraform_version":"test","serial":99,"lineage":"integration"}' > "$STATE_TEST_PATH"
-
-      - name: Save a coherent concurrent writer bundle
-        uses: ./
-        with:
-          operation: save
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          expected-remote-state-marker: ${{ steps.restore-current.outputs.remote-state-marker }}
-          backup-retention: "1"
-
-      - name: Restore stale local candidate
-        run: mv "$RUNNER_TEMP/stale-local.tfstate" "$STATE_TEST_PATH"
-
-      - name: Assert remote consistency conflict
-        env:
-          GITHUB_OUTPUT: ${{ runner.temp }}/expected-conflict-output
-          INPUT_OPERATION: save
-          INPUT_GITHUB_TOKEN: ${{ github.token }}
-          INPUT_STATE_REPOSITORY: ${{ github.repository }}
-          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
-          INPUT_STATE_PATH: ${{ env.STATE_TEST_PATH }}
-          INPUT_EXPECTED_REMOTE_STATE_MARKER: ${{ steps.restore-current.outputs.remote-state-marker }}
-        run: |
-          if node dist/index.js 2> "$RUNNER_TEMP/expected-conflict-error"; then
-            echo "Expected remote consistency conflict did not occur."
+          release_status=$(api_status 'releases/tags/terraform-state' "$RUNNER_TEMP/preflight-release.json")
+          tag_status=$(api_status 'git/ref/tags/terraform-state' "$RUNNER_TEMP/preflight-tag.json")
+          if [ "$release_status" != 404 ] || [ "$tag_status" != 404 ]; then
+            echo "::error::Fixed terraform-state namespace is not empty (release HTTP $release_status, tag HTTP $tag_status); refusing live integration without mutation."
             exit 1
           fi
+          echo 'absent=true' >> "$GITHUB_OUTPUT"
 
-      - name: Restore state after conflict
-        id: restore-after-conflict
+      - name: Atomically claim fixed integration tag
+        id: claim
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          response="$RUNNER_TEMP/claimed-tag.json"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref='refs/tags/terraform-state' \
+            -f sha="$EXPECTED_SHA" > "$response"
+          echo 'claimed=true' >> "$GITHUB_OUTPUT"
+          echo "tag-sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          jq -e --arg sha "$EXPECTED_SHA" '.ref == "refs/tags/terraform-state" and .object.sha == $sha' "$response" > /dev/null
+
+      - name: Bootstrap fixed state storage
+        id: bootstrap
+        env:
+          TERRAFORM_BOOTSTRAP: "true"
         uses: ./
         with:
           operation: restore
           github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
 
-      - name: Prepare final disposable state
-        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":2,"lineage":"integration"}' > "$STATE_TEST_PATH"
+      - name: Verify bootstrap ownership
+        env:
+          EXPECTED_RELEASE_ID: ${{ steps.bootstrap.outputs.release-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${{ steps.bootstrap.outputs.bootstrapped }}" = true
+          test "${{ steps.bootstrap.outputs.remote-state-marker }}" = absent
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/terraform-state" --jq '.id')
+          test "$release_id" = "$EXPECTED_RELEASE_ID"
 
-      - name: Save updated state and create backup
+      - name: Create small plaintext state
+        run: printf '%s\n' '{"version":4,"terraform_version":"integration","serial":1,"lineage":"release-candidate","resources":[]}' > terraform.tfstate
+
+      - name: Save plaintext state
         uses: ./
         with:
           operation: save
           github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          expected-remote-state-marker: ${{ steps.restore-after-conflict.outputs.remote-state-marker }}
-          backup-retention: "1"
 
-      - name: Restore state for retention rollover
-        id: restore-retention
+      - name: Remove local state before restore
+        run: rm -f terraform.tfstate
+
+      - name: Restore saved state
         uses: ./
         with:
           operation: restore
           github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
 
-      - name: Prepare second updated disposable state
-        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":3,"lineage":"integration"}' > "$STATE_TEST_PATH"
+      - name: Verify restored plaintext state
+        run: jq -e '.version == 4 and .serial == 1 and .lineage == "release-candidate" and .resources == []' terraform.tfstate > /dev/null
 
-      - name: Save second state and enforce backup retention
-        uses: ./
-        with:
-          operation: save
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          expected-remote-state-marker: ${{ steps.restore-retention.outputs.remote-state-marker }}
-          backup-retention: "1"
-
-      - name: Assert one complete backup bundle remains after retention
+      - name: Guard cleanup ownership
+        id: cleanup-guard
+        if: ${{ always() && steps.claim.outputs.claimed == 'true' }}
         env:
+          EXPECTED_RELEASE_ID: ${{ steps.bootstrap.outputs.release-id }}
+          EXPECTED_TAG_SHA: ${{ steps.claim.outputs.tag-sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_json="$RUNNER_TEMP/retained-release.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" > "$release_json"
-          backup_name=$(jq -r '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".json") | not)] | if length == 1 then .[0] else empty end' "$release_json")
-          test -n "$backup_name"
-          jq -e --arg metadata "$backup_name.metadata.json" '[.assets[].name] | index($metadata) != null' "$release_json" > /dev/null
-          jq -e --arg manifest "$backup_name.manifest.json" '[.assets[].name] | index($manifest) != null' "$release_json" > /dev/null
-          metadata_count=$(jq '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".metadata.json"))] | length' "$release_json")
-          manifest_count=$(jq '[.assets[].name | select(startswith("terraform.tfstate.backup-")) | select(endswith(".manifest.json"))] | length' "$release_json")
-          test "$metadata_count" -eq 1
-          test "$manifest_count" -eq 1
+          api_status() {
+            local endpoint=$1
+            local output=$2
+            curl --silent --show-error --output "$output" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
+          }
 
-      - name: Add unrelated asset to test reset fail-closed behavior
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          printf '%s\n' integration-only > test-state/unrelated.txt
-          gh release upload "$STATE_TEST_TAG" test-state/unrelated.txt --repo "$GITHUB_REPOSITORY"
+          release_json="$RUNNER_TEMP/cleanup-release.json"
+          tag_json="$RUNNER_TEMP/cleanup-tag.json"
+          release_status=$(api_status 'releases/tags/terraform-state' "$release_json")
+          tag_status=$(api_status 'git/ref/tags/terraform-state' "$tag_json")
 
-      - name: Assert reset refuses an unexpected asset
-        env:
-          GITHUB_OUTPUT: ${{ runner.temp }}/expected-reset-output
-          INPUT_OPERATION: reset
-          INPUT_CONFIRMATION: RESET
-          INPUT_GITHUB_TOKEN: ${{ github.token }}
-          INPUT_STATE_REPOSITORY: ${{ github.repository }}
-          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
-          INPUT_STATE_ASSET: terraform.tfstate
-        run: |
-          if node dist/index.js 2> "$RUNNER_TEMP/expected-reset-error"; then
-            echo "Expected reset guard failure did not occur."
+          if [ "$release_status" != 200 ] && [ "$release_status" != 404 ]; then
+            echo "::error::Cannot verify integration Release ownership (HTTP $release_status)."
             exit 1
           fi
-
-      - name: Remove integration-only unrelated asset
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "unrelated.txt") | .id' || true)
-          if [ -n "$asset_id" ]; then
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          if [ "$tag_status" != 200 ] && [ "$tag_status" != 404 ]; then
+            echo "::error::Cannot verify integration tag ownership (HTTP $tag_status)."
+            exit 1
           fi
+          if [ "$release_status" = 200 ] && [ -n "$EXPECTED_RELEASE_ID" ]; then
+            current_release_id=$(jq -r '.id' "$release_json")
+            if [ "$current_release_id" != "$EXPECTED_RELEASE_ID" ]; then
+              echo "::error::Release identity changed; refusing cleanup."
+              exit 1
+            fi
+          fi
+          if [ "$tag_status" = 200 ]; then
+            current_tag_sha=$(jq -r '.object.sha' "$tag_json")
+            if [ "$current_tag_sha" != "$EXPECTED_TAG_SHA" ]; then
+              echo "::error::Tag target changed; refusing cleanup."
+              exit 1
+            fi
+          fi
+          echo 'owned=true' >> "$GITHUB_OUTPUT"
 
-      - name: Reset disposable state
-        if: success()
+      - name: Reset fixed live integration storage
+        id: reset-live
+        if: ${{ always() && steps.cleanup-guard.outputs.owned == 'true' }}
         uses: ./
         with:
           operation: reset
-          confirmation: RESET
           github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-asset: terraform.tfstate
+          reset-target: all
 
-      - name: Restore clean state storage after reset
-        if: success()
-        run: rm -f "$STATE_TEST_PATH"
-
-      - name: Bootstrap clean state storage after reset
-        if: success()
-        uses: ./
-        with:
-          operation: restore
-          bootstrap: "true"
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-
-      - name: Generate disposable age key material
-        if: success()
-        run: |
-          node --input-type=module -e 'import { appendFileSync } from "node:fs"; import { generateIdentity, identityToRecipient } from "age-encryption"; const identity = await generateIdentity(); const recipient = await identityToRecipient(identity); process.stdout.write(`::add-mask::${identity}\n`); appendFileSync(process.env.GITHUB_ENV, `STATE_TEST_AGE_IDENTITY=${identity}\nSTATE_TEST_AGE_RECIPIENT=${recipient}\n`);'
-
-      - name: Save encrypted disposable state
-        if: success()
-        run: printf '%s\n' '{"version":4,"terraform_version":"test","serial":4,"lineage":"encrypted-integration"}' > "$STATE_TEST_PATH"
-
-      - name: Persist encrypted disposable state
-        if: success()
-        uses: ./
-        with:
-          operation: save
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          bootstrap: "true"
-          expected-remote-state-marker: absent
-          encryption: age
-          age-recipients: ${{ env.STATE_TEST_AGE_RECIPIENT }}
-
-      - name: Verify encrypted asset is not plaintext
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate") | .id')
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/state.age"
-          ! grep -qF 'encrypted-integration' "$RUNNER_TEMP/state.age"
-
-      - name: Replace age metadata with an integrity mismatch
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          valid_dir="$RUNNER_TEMP/valid-metadata"
-          invalid_dir="$RUNNER_TEMP/invalid-metadata"
-          mkdir -p "$valid_dir" "$invalid_dir"
-          metadata_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate.metadata.json") | .id')
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$metadata_id" -H 'Accept: application/octet-stream' > "$valid_dir/terraform.tfstate.metadata.json"
-          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$metadata_id"
-          printf '%s\n' '{"format_version":1,"encryption":"age","ciphertext_sha256":"0000000000000000000000000000000000000000000000000000000000000000","action_version":"integration"}' > "$invalid_dir/terraform.tfstate.metadata.json"
-          gh release upload "$STATE_TEST_TAG" "$invalid_dir/terraform.tfstate.metadata.json" --repo "$GITHUB_REPOSITORY"
-
-      - name: Prepare integrity mismatch restore
-        if: success()
-        run: rm -f "$STATE_TEST_PATH"
-
-      - name: Assert encrypted metadata integrity mismatch
-        if: success()
-        env:
-          GITHUB_OUTPUT: ${{ runner.temp }}/expected-integrity-output
-          INPUT_OPERATION: restore
-          INPUT_GITHUB_TOKEN: ${{ github.token }}
-          INPUT_STATE_REPOSITORY: ${{ github.repository }}
-          INPUT_RELEASE_TAG: ${{ env.STATE_TEST_TAG }}
-          INPUT_STATE_PATH: ${{ env.STATE_TEST_PATH }}
-          INPUT_ENCRYPTION: age
-          INPUT_AGE_IDENTITIES: ${{ env.STATE_TEST_AGE_IDENTITY }}
-        run: |
-          if node dist/index.js 2> "$RUNNER_TEMP/expected-integrity-error"; then
-            echo "Expected encrypted metadata integrity mismatch did not occur."
-            exit 1
-          fi
-
-      - name: Restore valid age metadata
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          metadata_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TEST_TAG" --jq '.assets[] | select(.name == "terraform.tfstate.metadata.json") | .id' || true)
-          if [ -n "$metadata_id" ]; then
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$metadata_id"
-          fi
-          gh release upload "$STATE_TEST_TAG" "$RUNNER_TEMP/valid-metadata/terraform.tfstate.metadata.json" --repo "$GITHUB_REPOSITORY"
-
-      - name: Restore encrypted disposable state
-        if: success()
-        run: rm -f "$STATE_TEST_PATH"
-
-      - name: Decrypt encrypted disposable state
-        if: success()
-        uses: ./
-        with:
-          operation: restore
-          github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-path: ${{ env.STATE_TEST_PATH }}
-          encryption: age
-          age-identities: ${{ env.STATE_TEST_AGE_IDENTITY }}
-
-      - name: Verify decrypted disposable state
-        if: success()
-        run: grep -qF 'encrypted-integration' "$STATE_TEST_PATH"
-
-      - name: Cleanup disposable release with native reset
-        if: always()
+      - name: Retry guarded cleanup after a reset failure
+        if: ${{ always() && steps.cleanup-guard.outputs.owned == 'true' && steps.reset-live.outcome != 'success' }}
         uses: ./
         with:
           operation: reset
-          confirmation: RESET
           github-token: ${{ github.token }}
-          state-repository: ${{ github.repository }}
-          release-tag: ${{ env.STATE_TEST_TAG }}
-          state-asset: terraform.tfstate
+          reset-target: all
+
+      - name: Assert fixed live namespace was removed
+        if: ${{ always() && steps.claim.outputs.claimed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api_status() {
+            local endpoint=$1
+            local output=$2
+            curl --silent --show-error --output "$output" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
+          }
+
+          release_status=$(api_status 'releases/tags/terraform-state' "$RUNNER_TEMP/final-release.json")
+          tag_status=$(api_status 'git/ref/tags/terraform-state' "$RUNNER_TEMP/final-tag.json")
+          test "$release_status" = 404
+          test "$tag_status" = 404

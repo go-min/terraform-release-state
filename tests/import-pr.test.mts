@@ -237,8 +237,7 @@ function importContext(options: {
   } as never;
   const config = {
     operation: "import",
-    target: { owner: "go-min", repo: "state" },
-    prTarget: { owner: "go-min", repo: "consumer" },
+    target: { owner: "go-min", repo: "consumer" },
     tag: "terraform-state",
     workspace: "/workspace",
     terraformRoot: "/workspace/terraform",

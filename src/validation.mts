@@ -21,32 +21,6 @@ export function parseBoolean(value: string, name: string): boolean {
   fail(`${name} must be true or false.`);
 }
 
-export function parseRetention(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1000) {
-    fail("backup-retention must be an integer from 0 through 1000.");
-  }
-  return parsed;
-}
-
-export function parseRepository(value: string): {
-  owner: string;
-  repo: string;
-} {
-  const parts = value.split("/");
-  if (
-    parts.length !== 2 ||
-    parts.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part))
-  ) {
-    fail("state-repository must use the owner/name format.");
-  }
-  return { owner: parts[0], repo: parts[1] };
-}
-
-export function resolveStatePath(value: string, workspace: string): string {
-  return resolveWorkspacePath(value, "state-path", workspace);
-}
-
 export function resolveWorkspacePath(
   value: string,
   name: string,
@@ -58,24 +32,4 @@ export function resolveWorkspacePath(
     fail(`${name} must remain inside GITHUB_WORKSPACE.`);
   }
   return absolute;
-}
-
-export function validateReleaseComponent(value: string, name: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value))
-    fail(`${name} contains unsupported characters.`);
-}
-
-export function validateGitRef(value: string, name: string): void {
-  if (
-    !value ||
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.startsWith(".") ||
-    value.endsWith(".") ||
-    value.includes("..") ||
-    value.includes("@{") ||
-    [...value].some((character) => "\0 ~^:?*[]\\".includes(character))
-  ) {
-    fail(`${name} contains unsupported Git ref characters.`);
-  }
 }

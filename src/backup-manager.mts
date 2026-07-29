@@ -4,10 +4,8 @@ import {
   createBackupName,
   manifestName,
   metadataName,
-  signatureName,
   type BundleAssets,
 } from "./asset-names.mjs";
-import { encryptState } from "./encryption.mjs";
 import { failWithCode } from "./errors.mjs";
 import {
   deleteAsset,
@@ -17,15 +15,14 @@ import {
 } from "./github-api.mjs";
 import { sha256 } from "./integrity.mjs";
 import { marker } from "./marker.mjs";
-import { ageRecipientsFingerprint } from "./manifest.mjs";
 import {
+  compatibilityBackupMetadata,
   createBundleData,
   createBundleDataFromManifest,
   loadStateBundle,
   type BundleData,
   type LoadedStateBundle,
 } from "./state-bundle.mjs";
-import { createBackupMetadata } from "./state-metadata.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
 
 function actionVersion(): string {
@@ -41,10 +38,9 @@ async function backupBundleData(
 ): Promise<BundleData> {
   const { config } = context;
   if (previous.manifest) {
-    const metadata = createBackupMetadata({
+    const metadata = compatibilityBackupMetadata({
       stored: previous.stored,
       currentAsset: current.name,
-      encryption: config.encryption.mode,
       sourceCommit: config.sourceCommit,
       workflowRunId: config.workflowRunId,
       actionVersion: actionVersion(),
@@ -66,27 +62,19 @@ async function backupBundleData(
         },
       },
       previous.stored,
-      context,
       metadata,
     );
   }
   if (!previous.plaintext) {
     failWithCode(
-      "TRS_LEGACY_MIGRATION_IDENTITY_REQUIRED",
-      "Legacy state must be decrypted before a complete backup manifest can be created.",
+      "TRS_OBJECT_SET_INCOMPLETE",
+      "Legacy state must be available as verified plaintext before backup creation.",
     );
   }
-  // Legacy encrypted metadata cannot identify the original recipient set.
-  // Re-encrypt the verified plaintext for the configured recipients so the
-  // migrated backup's key fingerprint describes its actual stored bytes.
-  const stored =
-    config.encryption.mode === "age"
-      ? await encryptState(config.encryption, previous.plaintext)
-      : previous.stored;
-  const metadata = createBackupMetadata({
+  const stored = previous.stored;
+  const metadata = compatibilityBackupMetadata({
     stored,
     currentAsset: current.name,
-    encryption: config.encryption.mode,
     sourceCommit: config.sourceCommit,
     workflowRunId: config.workflowRunId,
     actionVersion: actionVersion(),
@@ -98,13 +86,8 @@ async function backupBundleData(
       name,
       stored,
       plaintext: previous.plaintext,
-      encryptionMode: config.encryption.mode,
-      encryptionKeyFingerprint:
-        config.encryption.mode === "age"
-          ? // A legacy object has no recipient fingerprint. The save recipients
-            // define the non-secret key set recorded during migration.
-            ageRecipientsFingerprint(config.encryption.recipients)
-          : null,
+      encryptionMode: "none",
+      encryptionKeyFingerprint: null,
       parentMarker: marker(current),
       parentStoredSha256: sha256(previous.stored),
       sourceCommit: config.sourceCommit,
@@ -112,7 +95,6 @@ async function backupBundleData(
       actionVersion: actionVersion(),
       createdAt,
     },
-    context,
     metadata,
   );
 }
@@ -142,18 +124,8 @@ async function uploadBundle(
       "application/json",
     );
   }
-  if (data.signature) {
-    uploaded.signature = await uploadAsset(
-      octokit,
-      config.target,
-      release.id,
-      signatureName(name),
-      data.signature,
-      "application/json",
-    );
-  }
   // The manifest is uploaded last and acts as the flat-bundle completion
-  // signal. Generation pointers and atomic promotion remain deferred to v0.5.
+  // signal.
   uploaded.manifest = await uploadAsset(
     octokit,
     config.target,
@@ -188,7 +160,6 @@ async function assertUploadedBytes(
   const entries: Array<[Asset | undefined, Buffer | undefined, string]> = [
     [uploaded.state, expected.state, "state"],
     [uploaded.metadata, expected.metadata, "metadata"],
-    [uploaded.signature, expected.signature, "signature"],
     [uploaded.manifest, expected.manifest, "manifest"],
   ];
   for (const [asset, data, kind] of entries) {

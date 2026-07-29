@@ -18,6 +18,17 @@ async function run(): Promise<void> {
     core.setOutput("operation", "reset");
     core.setOutput("reset-deleted-asset-count", result.deletedAssetCount);
     core.setOutput("reset-release-found", result.releaseFound);
+    core.setOutput("reset-action", result.action);
+    core.setOutput("reset-target", result.target);
+    if (result.promotedMarker) {
+      core.setOutput("reset-promoted-marker", result.promotedMarker);
+      core.setOutput("remote-state-marker", result.promotedMarker);
+    }
+    if (result.action !== "promoted") {
+      core.setOutput("state-write-committed", false);
+      core.setOutput("state-phase", "complete");
+      core.setOutput("state-status", "success");
+    }
     return;
   }
   if (config.operation === "import") {

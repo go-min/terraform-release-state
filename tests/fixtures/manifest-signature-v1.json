@@ -1,8 +1,0 @@
-{
-  "signature": "terraform-release-state",
-  "schema_version": 1,
-  "manifest_name": "terraform.tfstate.manifest.json",
-  "algorithm": "Ed25519",
-  "key_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-}

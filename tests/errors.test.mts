@@ -34,4 +34,16 @@ test("stable ActionError codes survive normalization and display", () => {
     normalizeActionError(new Error("unexpected")).code,
     "TRS_UNEXPECTED",
   );
+  for (const code of [
+    "TRS_V04_MIGRATION_REQUIRED",
+    "TRS_RESTORE_RECEIPT_REQUIRED",
+    "TRS_RESTORE_RECEIPT_INVALID",
+  ] as const) {
+    assert.throws(
+      () => failWithCode(code, "stable v0.5 failure"),
+      (error: unknown) =>
+        error instanceof ActionError &&
+        (error as Error & { code: string }).code === code,
+    );
+  }
 });

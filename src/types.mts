@@ -21,45 +21,25 @@ export type RepositoryTarget = {
   repo: string;
 };
 
-export type EncryptionMode = "none" | "age";
-
-export type EncryptionConfig = {
-  mode: EncryptionMode;
-  recipients: string[];
-  identities: string[];
-};
-
-export type SignaturePolicy = "allow-unsigned" | "require";
-
-export type SigningConfig = {
-  policy: SignaturePolicy;
-  privateKeyPem: string;
-  verificationKeys: string[];
-};
-
 export type ActionConfig = {
   operation: "restore" | "save" | "reset" | "import";
   token: string;
   target: RepositoryTarget;
-  prTarget: RepositoryTarget;
   tag: string;
   assetName: string;
   workspace: string;
   statePath: string;
   bootstrap: boolean;
-  expectedMarker: string;
+  receiptPath: string;
   backupRetention: number;
   sourceCommit: string;
   workflowRunId: string;
-  resetConfirmation: string;
+  resetTarget: string;
   importsPath: string;
   terraformRoot: string;
-  createPr: boolean;
   prBase: string;
   prBranch: string;
   prTitle: string;
-  encryption: EncryptionConfig;
-  signing: SigningConfig;
 };
 
 export type StateManagerContext = {
