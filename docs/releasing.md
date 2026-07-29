@@ -19,9 +19,9 @@ the default Release Please commit parser:
 Examples:
 
 ```text
-feat: add encrypted state restore
-fix: reject stale metadata during save
-docs: clarify cross-repository permissions
+feat: add verified backup promotion
+fix: reject stale receipt during save
+docs: clarify protected bootstrap
 ```
 
 Because `main` is protected with squash merges, use the pull request title as
@@ -33,9 +33,15 @@ the final Conventional Commit message. Do not use free-form titles such as
 1. Open a pull request with a Conventional Commit title.
 2. Let Check and Security complete successfully for the pull request.
 3. Merge the pull request into `main` using squash merge.
-4. The release workflow runs disposable integration against the exact merged
-   candidate SHA. Release Please cannot start before it passes, and a newer
-   `main` update cancels the stale run before the integrated-head check.
+4. The release workflow rebuilds the exact merged candidate SHA, runs the
+   action boundary against a deterministic local GitHub API fixture, and then
+   performs a minimal live bootstrap/save/restore/reset cycle in the action
+   repository's fixed `terraform-state` namespace. The live cycle refuses to
+   start unless the Release and tag are both absent, atomically binds the tag
+   to the exact candidate SHA, guards cleanup by that identity, and verifies
+   both objects are absent afterward. Release Please cannot start before the
+   gate passes, and a newer `main` update cancels the stale run before the
+   integrated-head check.
 5. Release Please opens or updates the release pull request.
 6. Review the proposed version, `CHANGELOG.md`, `package.json`, and generated
    `dist/` changes.
@@ -70,7 +76,7 @@ The stable tag identifies the intended release, but workflow examples should
 pin its immutable release commit:
 
 ```yaml
-uses: go-min/terraform-release-state@25c63506b7f9d288683dfff3c29a1e69f4fa4006 # v0.3.1
+uses: go-min/terraform-release-state@fb529572e17d20c414afacc7a7e14ffa0033058d # v0.4.0
 ```
 
 When upgrading, verify the tag and GitHub Release, replace the full SHA, and

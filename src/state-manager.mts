@@ -4,11 +4,9 @@ import {
   bundleAssets,
   manifestName,
   metadataName,
-  signatureName,
   type BundleAssets,
 } from "./asset-names.mjs";
 import { createBackup, retainBackups } from "./backup-manager.mjs";
-import { encryptState } from "./encryption.mjs";
 import { failWithCode } from "./errors.mjs";
 import {
   createRelease,
@@ -21,20 +19,16 @@ import {
   uploadAsset,
 } from "./github-api.mjs";
 import { assetDigest, sha256 } from "./integrity.mjs";
-import { ageRecipientsFingerprint } from "./manifest.mjs";
-import {
-  decodeMarker,
-  marker,
-  sameAssetMarker,
-  sameMarker,
-} from "./marker.mjs";
+import { marker, sameAssetMarker, sameMarker } from "./marker.mjs";
 import {
   createBundleData,
+  loadCompleteReleaseBundles,
   loadStateBundle,
   type BundleData,
   type LoadedStateBundle,
 } from "./state-bundle.mjs";
 import { readStateFile, writeStateFile } from "./state-files.mjs";
+import { readRestoreReceipt, writeRestoreReceipt } from "./receipt.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
 
 function emitVerificationOutputs(bundle: LoadedStateBundle): void {
@@ -57,8 +51,8 @@ function emitVerificationOutputs(bundle: LoadedStateBundle): void {
     core.warning(
       `[${warning}] ${
         warning === "TRS_LEGACY_UNSIGNED"
-          ? "State uses the unsigned legacy storage format; a successful v0.4 save migrates it in place."
-          : "State manifest is unsigned because signature-policy=allow-unsigned."
+          ? "State uses the unsigned legacy storage format; a successful v0.5 save migrates it in place."
+          : "State manifest uses the v0.4 unsigned compatibility format."
       }`,
     );
   }
@@ -99,7 +93,7 @@ async function getOrBootstrapRelease(
   if (!config.bootstrap) {
     failWithCode(
       "TRS_OBJECT_NOT_FOUND",
-      `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
+      `State release ${config.tag} does not exist; set TERRAFORM_BOOTSTRAP=true only in the protected bootstrap workflow.`,
     );
   }
   return createRelease(octokit, config.target, config.tag, config.assetName);
@@ -114,21 +108,10 @@ async function getSaveRelease(
     context.config.tag,
   );
   if (existing) return { release: existing, created: false };
-  if (!context.config.bootstrap) {
-    failWithCode(
-      "TRS_OBJECT_NOT_FOUND",
-      `State release ${context.config.tag} does not exist; set bootstrap=true explicitly.`,
-    );
-  }
-  return {
-    release: await createRelease(
-      context.octokit,
-      context.config.target,
-      context.config.tag,
-      context.config.assetName,
-    ),
-    created: true,
-  };
+  failWithCode(
+    "TRS_OBJECT_NOT_FOUND",
+    `State release ${context.config.tag} does not exist. Run restore first; only restore may bootstrap storage when TERRAFORM_BOOTSTRAP=true.`,
+  );
 }
 
 function hasCompanion(bundle: BundleAssets): Asset | undefined {
@@ -147,7 +130,10 @@ function sameOptionalAsset(
   );
 }
 
-function sameBundle(expected: BundleAssets, actual: BundleAssets): boolean {
+export function sameBundle(
+  expected: BundleAssets,
+  actual: BundleAssets,
+): boolean {
   return (
     sameOptionalAsset(expected.state, actual.state) &&
     sameOptionalAsset(expected.metadata, actual.metadata) &&
@@ -223,6 +209,7 @@ export async function restore(context: StateManagerContext): Promise<void> {
     core.setOutput("state-write-committed", false);
     core.setOutput("state-phase", "complete");
     core.setOutput("state-status", "success");
+    writeRestoreReceipt(config, "absent");
     return;
   }
   const bundle = await loadStateBundle(
@@ -250,9 +237,10 @@ export async function restore(context: StateManagerContext): Promise<void> {
   core.setOutput("state-write-committed", false);
   core.setOutput("state-phase", "complete");
   core.setOutput("state-status", "success");
+  writeRestoreReceipt(config, marker(currentAssets.state));
 }
 
-async function uploadCurrentBundle(
+export async function uploadCurrentBundle(
   context: StateManagerContext,
   release: Release,
   data: BundleData,
@@ -276,16 +264,6 @@ async function uploadCurrentBundle(
       "application/json",
     );
   }
-  if (data.signature) {
-    uploaded.signature = await uploadAsset(
-      octokit,
-      config.target,
-      release.id,
-      signatureName(config.assetName),
-      data.signature,
-      "application/json",
-    );
-  }
   uploaded.manifest = await uploadAsset(
     octokit,
     config.target,
@@ -296,7 +274,7 @@ async function uploadCurrentBundle(
   );
 }
 
-async function deleteBundleAssets(
+export async function deleteBundleAssets(
   context: StateManagerContext,
   bundle: BundleAssets,
 ): Promise<void> {
@@ -322,7 +300,7 @@ function previousData(
   return previous.signatureData;
 }
 
-async function restorePreviousBundle(
+export async function restorePreviousBundle(
   context: StateManagerContext,
   release: Release,
   previous: LoadedStateBundle | undefined,
@@ -414,7 +392,7 @@ async function restorePreviousBundle(
   }
 }
 
-async function assertUploadedBundle(
+export async function assertUploadedBundle(
   context: StateManagerContext,
   release: Release,
   uploaded: BundleAssets,
@@ -439,7 +417,7 @@ async function assertUploadedBundle(
   const expectedData: Record<keyof BundleAssets, Buffer | undefined> = {
     state: expected.state,
     metadata: expected.metadata,
-    signature: expected.signature,
+    signature: undefined,
     manifest: expected.manifest,
   };
   for (const kind of ["state", "metadata", "signature", "manifest"] as const) {
@@ -485,29 +463,21 @@ export async function save(context: StateManagerContext): Promise<void> {
       `State file is empty: ${config.statePath}`,
     );
   }
-  const data = await encryptState(config.encryption, plaintext);
-  const expected = config.expectedMarker
-    ? decodeMarker(config.expectedMarker)
-    : undefined;
+  const data = plaintext;
+  const expected = readRestoreReceipt(config);
   const releaseResult = await getSaveRelease(context);
   let release = releaseResult.release;
   let assets = await listAssets(octokit, config.target, release.id);
   const previousAssets = bundleAssets(assets, config.assetName);
   const current = previousAssets.state;
 
-  if (!expected && current) {
-    failWithCode(
-      "TRS_REMOTE_CHANGED",
-      "save requires expected-remote-state-marker from restore when current state exists.",
-    );
-  }
   if (expected === "absent" && current) {
     failWithCode(
       "TRS_REMOTE_CHANGED",
       "Remote state appeared after restore; refusing to overwrite it.",
     );
   }
-  if (expected && expected !== "absent") {
+  if (expected !== "absent") {
     if (!current) {
       failWithCode(
         "TRS_REMOTE_CHANGED",
@@ -527,21 +497,10 @@ export async function save(context: StateManagerContext): Promise<void> {
       "Current state is missing while one or more companion assets remain.",
     );
   }
-  if (!current && !config.bootstrap && expected !== "absent") {
-    failWithCode(
-      "TRS_OBJECT_NOT_FOUND",
-      "Current state is missing; refusing implicit bootstrap.",
-    );
-  }
-
-  // Existing state, including legacy migration requirements and signature
-  // policy, is fully validated before Release metadata or assets are mutated.
-  const previous = current
-    ? await loadStateBundle(context, assets, config.assetName, "current", {
-        plaintext: "if-available",
-        legacyMigration: true,
-      })
-    : undefined;
+  // Validate the entire managed namespace before the first Release mutation.
+  // This also rejects v0.4 encrypted or signed objects with migration guidance.
+  const loadedBundles = await loadCompleteReleaseBundles(context, assets);
+  const previous = loadedBundles.get(config.assetName);
 
   const body = managedReleaseBody(config.target, config.tag, config.assetName);
   if (!releaseResult.created && release.body !== body) {
@@ -564,25 +523,19 @@ export async function save(context: StateManagerContext): Promise<void> {
 
   const parentMarker = current ? marker(current) : null;
   const parentStoredSha256 = previous ? sha256(previous.stored) : null;
-  const currentData = createBundleData(
-    {
-      role: "current",
-      name: config.assetName,
-      stored: data,
-      plaintext,
-      encryptionMode: config.encryption.mode,
-      encryptionKeyFingerprint:
-        config.encryption.mode === "age"
-          ? ageRecipientsFingerprint(config.encryption.recipients)
-          : null,
-      parentMarker,
-      parentStoredSha256,
-      sourceCommit: config.sourceCommit,
-      workflowRunId: config.workflowRunId,
-      actionVersion: process.env.GITHUB_ACTION_REF || "unknown",
-    },
-    context,
-  );
+  const currentData = createBundleData({
+    role: "current",
+    name: config.assetName,
+    stored: data,
+    plaintext,
+    encryptionMode: "none",
+    encryptionKeyFingerprint: null,
+    parentMarker,
+    parentStoredSha256,
+    sourceCommit: config.sourceCommit,
+    workflowRunId: config.workflowRunId,
+    actionVersion: process.env.GITHUB_ACTION_REF || "unknown",
+  });
 
   const replacement: BundleAssets = {};
   let verified: LoadedStateBundle;
@@ -621,7 +574,7 @@ export async function save(context: StateManagerContext): Promise<void> {
       "Verified current bundle does not contain its state asset.",
     );
   }
-  const bootstrapped = !current && config.bootstrap;
+  const bootstrapped = !current && expected === "absent";
   emitOutputs("save", release, authoritative, data, plaintext, bootstrapped);
   emitVerificationOutputs({
     ...verified,
@@ -632,6 +585,7 @@ export async function save(context: StateManagerContext): Promise<void> {
   core.setOutput("state-write-committed", true);
   core.setOutput("state-phase", "maintenance");
   try {
+    writeRestoreReceipt(config, marker(authoritative));
     const backupCount = await retainBackups(
       context,
       await listAssets(octokit, config.target, release.id),

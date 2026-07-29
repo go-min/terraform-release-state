@@ -2,16 +2,11 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const {
-  ageRecipientsFingerprint,
-  createManifest,
-  parseManifest,
-  serializeManifest,
-  terraformMetadata,
-} = await import(
-  // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/manifest.mjs"
-);
+const { createManifest, parseManifest, serializeManifest, terraformMetadata } =
+  await import(
+    // @ts-expect-error This source module is compiled into the temporary native-test build.
+    "../.test-build/src/manifest.mjs"
+  );
 
 const fixture = readFileSync("tests/fixtures/manifest-v1.json");
 
@@ -53,7 +48,7 @@ test("manifest parser rejects reordered, unknown, and unsupported fields", () =>
   );
 });
 
-test("manifest records digests, Terraform correlation metadata, and age key set", () => {
+test("manifest records digests, Terraform correlation metadata, and compatibility encryption fields", () => {
   const plaintext = Buffer.from(
     JSON.stringify({
       terraform_version: "1.14.0",
@@ -62,7 +57,8 @@ test("manifest records digests, Terraform correlation metadata, and age key set"
       resources: [{ sensitive: "not-in-manifest" }],
     }),
   );
-  const fingerprint = ageRecipientsFingerprint(["age1z", "age1a"]);
+  const fingerprint =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const manifest = createManifest({
     role: "current",
     name: "terraform.tfstate",
@@ -84,7 +80,7 @@ test("manifest records digests, Terraform correlation metadata, and age key set"
     lineage: "lineage-id",
   });
   assert.equal(JSON.stringify(manifest).includes("sensitive"), false);
-  assert.equal(fingerprint, ageRecipientsFingerprint(["age1a", "age1z"]));
+  assert.equal(manifest.encryption.key_fingerprint, fingerprint);
   assert.deepEqual(terraformMetadata(Buffer.from("not-json")), {
     version: null,
     serial: null,

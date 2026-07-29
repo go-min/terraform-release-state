@@ -29,7 +29,7 @@ function pullRequestBody(
 ): string {
   const { config } = context;
   const stateRepository = `${config.target.owner}/${config.target.repo}`;
-  const targetRepository = `${config.prTarget.owner}/${config.prTarget.repo}`;
+  const targetRepository = stateRepository;
   const terraformRoot =
     relative(config.workspace, config.terraformRoot).replaceAll("\\", "/") ||
     ".";
@@ -78,30 +78,30 @@ export async function prepareImportPullRequest(
   collisionCount: number,
 ): Promise<ImportPullRequestResult> {
   const { octokit, config } = context;
-  const baseSha = await getRefSha(octokit, config.prTarget, config.prBase);
+  const baseSha = await getRefSha(octokit, config.target, config.prBase);
   const baseFile = await getRepositoryFile(
     octokit,
-    config.prTarget,
+    config.target,
     path,
     baseSha,
   );
   const baseContent = baseFile?.content || Buffer.alloc(0);
   const existingPr = await findOpenPullRequest(
     octokit,
-    config.prTarget,
+    config.target,
     config.prBranch,
     config.prBase,
   );
   let branchSha = await getOptionalRefSha(
     octokit,
-    config.prTarget,
+    config.target,
     config.prBranch,
   );
   let baseIsAncestor = false;
   if (branchSha) {
     const comparison = await inspectBranchDiff(
       octokit,
-      config.prTarget,
+      config.target,
       baseSha,
       branchSha,
     );
@@ -129,7 +129,7 @@ export async function prepareImportPullRequest(
     if (!existingPr) return { action: "unchanged", baseContent };
     const currentBranchSha = await getRefSha(
       octokit,
-      config.prTarget,
+      config.target,
       config.prBranch,
     );
     if (currentBranchSha !== branchSha) {
@@ -137,7 +137,7 @@ export async function prepareImportPullRequest(
         `PR branch ${config.prBranch} changed from expected SHA ${branchSha} to ${currentBranchSha} before obsolete PR cleanup; refusing to close ${existingPr.html_url}.`,
       );
     }
-    await closePullRequest(octokit, config.prTarget, existingPr.number);
+    await closePullRequest(octokit, config.target, existingPr.number);
     core.info(
       `Import proposals: closed obsolete pull request ${existingPr.html_url}; branch ${config.prBranch} was retained because GitHub ref deletion has no expected-SHA guard.`,
     );
@@ -151,7 +151,7 @@ export async function prepareImportPullRequest(
   if (!branchSha) {
     branchSha = await createBranch(
       octokit,
-      config.prTarget,
+      config.target,
       config.prBranch,
       baseSha,
     );
@@ -159,7 +159,7 @@ export async function prepareImportPullRequest(
     if (!baseIsAncestor) {
       const comparison = await inspectBranchDiff(
         octokit,
-        config.prTarget,
+        config.target,
         baseSha,
         branchSha,
       );
@@ -176,7 +176,7 @@ export async function prepareImportPullRequest(
   }
   await rebuildBranchFromBase(
     octokit,
-    config.prTarget,
+    config.target,
     config.prBranch,
     branchSha,
     baseSha,
@@ -197,7 +197,7 @@ export async function prepareImportPullRequest(
     existingPr ||
     (await createPullRequest(
       octokit,
-      config.prTarget,
+      config.target,
       config.prBranch,
       config.prBase,
       config.prTitle,
@@ -206,7 +206,7 @@ export async function prepareImportPullRequest(
   if (existingPr) {
     await updatePullRequest(
       octokit,
-      config.prTarget,
+      config.target,
       existingPr.number,
       config.prTitle,
       body,

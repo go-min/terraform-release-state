@@ -1,6 +1,7 @@
 import { failWithCode } from "./errors.mjs";
 import { sha256 } from "./integrity.mjs";
-import type { EncryptionMode } from "./types.mjs";
+
+export type EncryptionMode = "none" | "age";
 
 export type ObjectRole = "current" | "backup";
 
@@ -293,22 +294,6 @@ export function terraformMetadata(
         ? parsed.lineage
         : null,
   };
-}
-
-export function ageRecipientsFingerprint(recipients: string[]): string {
-  if (recipients.length === 0) {
-    failWithCode(
-      "TRS_CONFIG_INVALID",
-      "Cannot fingerprint an empty age recipient set.",
-    );
-  }
-  const normalized = [...new Set(recipients)].sort();
-  return `sha256:${sha256(
-    Buffer.from(
-      `terraform-release-state/age-recipients/v1\n${normalized.join("\n")}\n`,
-      "utf8",
-    ),
-  )}`;
 }
 
 export function createManifest(input: ManifestInput): StateManifest {

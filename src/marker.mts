@@ -31,11 +31,11 @@ export function decodeMarker(value: string): DecodedMarker {
       !Number.isInteger(decoded.size) ||
       !decoded.updatedAt
     ) {
-      fail("Invalid expected-remote-state-marker.");
+      fail("Invalid marker in the protected restore receipt.");
     }
     return decoded;
   } catch {
-    fail("Invalid expected-remote-state-marker.");
+    fail("Invalid marker in the protected restore receipt.");
   }
 }
 

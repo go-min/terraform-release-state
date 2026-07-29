@@ -1,7 +1,5 @@
 import { strict as assert } from "node:assert";
-import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { generateIdentity, identityToRecipient } from "age-encryption";
 
 const { createBackup, retainBackups } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
@@ -20,17 +18,11 @@ const baseConfig = {
   workspace: "/workspace",
   statePath: "/workspace/terraform.tfstate",
   bootstrap: false,
-  expectedMarker: "",
+  receiptPath: "/runner/receipt.json",
   backupRetention: 1,
   sourceCommit: "source-sha",
   workflowRunId: "run-id",
-  resetConfirmation: "",
-  encryption: { mode: "none", recipients: [], identities: [] },
-  signing: {
-    policy: "allow-unsigned",
-    privateKeyPem: "",
-    verificationKeys: [],
-  },
+  resetTarget: "all",
 } as const;
 
 const release = { id: 7 } as never;
@@ -135,55 +127,6 @@ test("backup upload creates and verifies a manifest-complete flat bundle", async
   assert.equal(manifest.object.name, name);
   assert.equal(manifest.content.stored.sha256, metadata.sha256);
 });
-
-test("legacy age migration re-encrypts backup for the recorded recipient set", async () => {
-  const identity = await generateIdentity();
-  const recipient = await identityToRecipient(identity);
-  const { encryptState } = await import(
-    // @ts-expect-error This source module is compiled into the temporary native-test build.
-    "../.test-build/src/encryption.mjs"
-  );
-  const plaintext = Buffer.from("legacy-encrypted-state");
-  const oldCiphertext = await encryptState(
-    { mode: "age", recipients: [recipient], identities: [] },
-    plaintext,
-  );
-  const previous = {
-    ...legacyPrevious(oldCiphertext),
-    plaintext,
-    storedVerification: "verified",
-    plaintextVerification: "authenticated",
-  } as never;
-  const api = backupApi();
-  const config = {
-    ...baseConfig,
-    encryption: {
-      mode: "age",
-      recipients: [recipient],
-      identities: [identity],
-    },
-  } as const;
-  const name = await createBackup(
-    { octokit: api.octokit, config } as never,
-    release,
-    legacyPrevious(oldCiphertext).assets.state as never,
-    previous,
-  );
-  const stored = api.uploads.find((upload) => upload.name === name)?.data;
-  assert.ok(stored);
-  assert.notDeepEqual(stored, oldCiphertext);
-  const manifest = JSON.parse(
-    api.uploads
-      .find((upload) => upload.name === `${name}.manifest.json`)
-      ?.data.toString("utf8") || "{}",
-  );
-  assert.match(manifest.encryption.key_fingerprint, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(manifest.content.stored.sha256, metadataDigest(stored));
-});
-
-function metadataDigest(data: Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
-}
 
 for (const [kind, corruptId] of [
   ["state", 1],

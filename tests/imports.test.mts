@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -231,8 +232,9 @@ test("StateImport reads the Release asset and does not create a local state file
   const workspace = mkdtempSync(
     join(tmpdir(), "terraform-release-state-import-"),
   );
-  const statePath = join(workspace, "not-created.tfstate");
-  const importsPath = join(workspace, "imports.tf");
+  const statePath = join(workspace, "terraform.tfstate");
+  const terraformRoot = join(workspace, "terraform");
+  const importsPath = join(terraformRoot, "imports.generated.tf");
   const outputFile = join(workspace, "outputs.txt");
   const state = Buffer.from(
     JSON.stringify({
@@ -246,7 +248,11 @@ test("StateImport reads the Release asset and does not create a local state file
       ],
     }),
   );
-  writeFileSync(importsPath, "# existing\n");
+  mkdirSync(terraformRoot);
+  writeFileSync(importsPath, "# local file must remain untouched\n");
+  const generated = renderImports([
+    { address: "aws_instance.web", id: "i-remote" },
+  ]);
   const asset = {
     id: 7,
     name: "terraform.tfstate",
@@ -257,47 +263,62 @@ test("StateImport reads the Release asset and does not create a local state file
     paginate: async () => [asset],
     request: async () => ({ data: state }),
     rest: {
+      git: {
+        getRef: async ({ ref }: { ref: string }) => {
+          if (ref !== "heads/main") {
+            throw Object.assign(new Error("missing"), { status: 404 });
+          }
+          return { data: { object: { sha: "base-sha" } } };
+        },
+      },
       repos: {
         getReleaseByTag: async () => ({ data: { id: 1 } }),
         listReleaseAssets: "list",
+        getContent: async () => ({
+          data: {
+            type: "file",
+            content: Buffer.from(generated).toString("base64"),
+          },
+        }),
       },
+      pulls: { list: async () => ({ data: [] }) },
     },
   } as never;
   const config = {
     operation: "import",
     token: "token",
     target: { owner: "go-min", repo: "state" },
-    prTarget: { owner: "go-min", repo: "state" },
     tag: "terraform-state",
     assetName: "terraform.tfstate",
     workspace,
     statePath,
     bootstrap: false,
-    expectedMarker: "",
+    receiptPath: join(workspace, "receipt.json"),
     backupRetention: 20,
     sourceCommit: "",
     workflowRunId: "",
-    resetConfirmation: "",
+    resetTarget: "all",
     importsPath,
-    terraformRoot: workspace,
-    createPr: false,
+    terraformRoot,
     prBase: "main",
-    prBranch: "terraform-release-state/imports.tf",
+    prBranch: "terraform-release-state/imports.generated.tf",
     prTitle: "chore(terraform): update generated imports",
-    encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
 
   try {
     process.env.GITHUB_OUTPUT = outputFile;
     await generateImports({ octokit, config });
-    assert.equal(readFileSync(importsPath, "utf8"), "# existing\n");
+    assert.equal(
+      readFileSync(importsPath, "utf8"),
+      "# local file must remain untouched\n",
+    );
     assert.equal(existsSync(statePath), false);
     const outputs = readFileSync(outputFile, "utf8");
     assert.match(outputs, /operation<<[^\n]+\nimport\n/);
     assert.match(outputs, /import-candidate-count<<[^\n]+\n1\n/);
     assert.match(outputs, /import-skipped-count<<[^\n]+\n0\n/);
     assert.match(outputs, /import-collision-count<<[^\n]+\n0\n/);
-    assert.match(outputs, /import-pr-action<<[^\n]+\ndisabled\n/);
+    assert.match(outputs, /import-pr-action<<[^\n]+\nunchanged\n/);
   } finally {
     delete process.env.GITHUB_OUTPUT;
     rmSync(workspace, { recursive: true, force: true });
@@ -308,10 +329,12 @@ test("StateImport suppresses a target declared in a non-generated tf file", asyn
   const workspace = mkdtempSync(
     join(tmpdir(), "terraform-release-state-collision-"),
   );
-  const importsPath = join(workspace, "imports.generated.tf");
+  const terraformRoot = join(workspace, "terraform");
+  const importsPath = join(terraformRoot, "imports.generated.tf");
   const outputFile = join(workspace, "outputs.txt");
+  mkdirSync(terraformRoot);
   writeFileSync(
-    join(workspace, "existing.tf"),
+    join(terraformRoot, "existing.tf"),
     `import {
   to = aws_instance.web
   id = "i-existing"
@@ -342,34 +365,46 @@ test("StateImport suppresses a target declared in a non-generated tf file", asyn
     ],
     request: async () => ({ data: state }),
     rest: {
+      git: {
+        getRef: async ({ ref }: { ref: string }) => {
+          if (ref !== "heads/main") {
+            throw Object.assign(new Error("missing"), { status: 404 });
+          }
+          return { data: { object: { sha: "base-sha" } } };
+        },
+      },
       repos: {
         getReleaseByTag: async () => ({ data: { id: 1 } }),
         listReleaseAssets: "list",
+        getContent: async () => ({
+          data: {
+            type: "file",
+            content: Buffer.from(renderImports([])).toString("base64"),
+          },
+        }),
       },
+      pulls: { list: async () => ({ data: [] }) },
     },
   } as never;
   const config = {
     operation: "import",
     token: "token",
     target: { owner: "go-min", repo: "state" },
-    prTarget: { owner: "go-min", repo: "state" },
     tag: "terraform-state",
     assetName: "terraform.tfstate",
     workspace,
     statePath: join(workspace, "unused.tfstate"),
     bootstrap: false,
-    expectedMarker: "",
+    receiptPath: join(workspace, "receipt.json"),
     backupRetention: 20,
     sourceCommit: "",
     workflowRunId: "",
-    resetConfirmation: "",
+    resetTarget: "all",
     importsPath,
-    terraformRoot: workspace,
-    createPr: false,
+    terraformRoot,
     prBase: "main",
     prBranch: "terraform-release-state/imports.generated.tf",
     prTitle: "chore(terraform): update generated imports",
-    encryption: { mode: "none", recipients: [], identities: [] },
   } as never;
 
   try {

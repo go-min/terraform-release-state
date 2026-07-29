@@ -11,16 +11,6 @@ import {
   signatureName,
 } from "./asset-names.mjs";
 
-export const RESET_CONFIRMATION = "RESET";
-
-export function validateResetConfirmation(value: string): void {
-  if (value !== RESET_CONFIRMATION) {
-    throw new Error(
-      `reset requires confirmation=${RESET_CONFIRMATION}; no state resources were changed.`,
-    );
-  }
-}
-
 export function isResetAsset(
   assetName: string,
   stateAssetName: string,
@@ -58,11 +48,16 @@ export type ResetClient = {
   deleteAsset: (target: RepositoryTarget, assetId: number) => Promise<void>;
   deleteRelease: (target: RepositoryTarget, releaseId: number) => Promise<void>;
   deleteTag: (target: RepositoryTarget, tag: string) => Promise<void>;
+  beforeDelete?: (assets: Asset[]) => Promise<void>;
 };
 
 export type ResetResult = {
   deletedAssetCount: number;
   releaseFound: boolean;
+  action: "deleted" | "promoted" | "unchanged";
+  target: string;
+  promotedMarker?: string;
+  backupAssetName?: string;
 };
 
 export async function resetWithClient(
@@ -70,12 +65,15 @@ export async function resetWithClient(
   client: ResetClient,
 ): Promise<ResetResult> {
   const { config } = context;
-  validateResetConfirmation(config.resetConfirmation);
-
   const release = await client.getRelease(config.target, config.tag);
   if (!release) {
     await client.deleteTag(config.target, config.tag);
-    return { deletedAssetCount: 0, releaseFound: false };
+    return {
+      deletedAssetCount: 0,
+      releaseFound: false,
+      action: "unchanged",
+      target: "all",
+    };
   }
 
   const assets = await client.listAssets(config.target, release.id);
@@ -87,6 +85,7 @@ export async function resetWithClient(
         .join(", ")}).`,
     );
   }
+  await client.beforeDelete?.(assets);
 
   for (const asset of owned) {
     await client.deleteAsset(config.target, asset.id);
@@ -99,5 +98,10 @@ export async function resetWithClient(
   }
   await client.deleteRelease(config.target, release.id);
   await client.deleteTag(config.target, config.tag);
-  return { deletedAssetCount: owned.length, releaseFound: true };
+  return {
+    deletedAssetCount: owned.length,
+    releaseFound: true,
+    action: "deleted",
+    target: "all",
+  };
 }

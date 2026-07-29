@@ -272,11 +272,11 @@ test("createRelease documents the managed state without exposing its contents", 
   assert.match(body, /`go-min\/state`/);
   assert.match(body, /`terraform-state`/);
   assert.match(body, /`terraform\.tfstate`/);
-  assert.match(body, /`terraform\.tfstate\.metadata\.json`/);
   assert.match(body, /`terraform\.tfstate\.backup-\*`/);
-  assert.match(body, /present only when the current state uses age encryption/);
+  assert.match(body, /plaintext unsigned state/);
+  assert.match(body, /retains 20 verified backups/);
   assert.match(body, /github\.com\/go-min\/terraform-release-state/);
-  assert.doesNotMatch(body, /state-sha256|remote-state-marker|credentials/i);
+  assert.doesNotMatch(body, /state-sha256|credentials|age encryption/i);
 });
 
 test("updateReleaseBody updates the managed release description", async () => {

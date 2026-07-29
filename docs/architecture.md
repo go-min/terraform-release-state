@@ -1,110 +1,116 @@
 # Architecture
 
-Terraform Release State is a Node.js 24 JavaScript action that manages one
-Terraform state namespace in GitHub Release assets. The TypeScript `.mts`
-source is bundled into the committed `dist/index.js`.
+Terraform Release State v0.5 is a Node.js 24 JavaScript action implementing one
+fixed same-repository state protocol. TypeScript `.mts` source is compiled and
+bundled into committed `dist/index.js`.
 
 ## Boundary
 
 ```text
-consumer workflow
-  restore -> verified local state + opaque remote marker
-      -> Terraform init/plan/apply (consumer-owned)
-  save    <- marker check -> backup -> replace -> verify -> retain
+protected workflow
+  restore -> verify remote -> repository-root terraform.tfstate
+          -> protected RUNNER_TEMP receipt
+  Terraform plan/apply (consumer-owned, configuration under terraform)
+  save    -> receipt CAS -> verified backup -> replace -> verify -> retain 20
 
-  reset   -> confirmation -> namespace audit -> assets -> Release -> tag
-  import  -> verified state -> deterministic import proposal
+  import  -> verify remote -> structural scan -> safe fixed-path PR
+  reset all    -> namespace audit -> Release/tag deletion
+  reset backup -> verify -> safety backup -> CAS -> promote -> verify/rollback
 ```
 
-The action owns Release API access, state transfer, integrity checks, backups,
-retention, encryption, reset, and import proposals. The consumer owns
-Terraform commands, workflow concurrency, cloud credentials, approvals, and
-protected environments.
+The repository, Release tag, current asset, local path, backup retention,
+Terraform root, imports path, PR base, and PR branch are protocol constants.
+The action derives repository and provenance from GitHub context. The consumer
+owns Terraform commands, credentials, concurrency, approval, and workflow-level
+reset confirmation.
 
 ## Runtime components
 
-| Component                       | Responsibility                                             |
-| ------------------------------- | ---------------------------------------------------------- |
-| `config.mts`                    | Parse and validate the public action contract              |
-| `github-api.mts`                | GitHub API calls, pagination, retries, and reconciliation  |
-| `state-manager.mts`             | Restore, save, consistency, verification, and recovery     |
-| `backup-manager.mts`            | Backup pairs, compensation, orphan cleanup, retention      |
-| `manifest.mts`                  | Strict schema, canonical serialization, Terraform metadata |
-| `signing.mts`                   | Ed25519 key parsing, canonical signatures, verification    |
-| `state-bundle.mts`              | Flat-bundle classification, dual-read, digest policy       |
-| `errors.mts`                    | Stable machine-readable action failures                    |
-| `reset-core.mts`                | Fail-closed reset policy                                   |
-| `encryption.mts`                | Native X25519 age encryption and decryption                |
-| `state-files.mts`               | Workspace containment and secure local writes              |
-| `imports.mts` / `import-pr.mts` | Import normalization, diff, and optional PR                |
-| `terraform-config.mts`          | Structural scan for existing Terraform import targets      |
+| Component                       | Responsibility                                                |
+| ------------------------------- | ------------------------------------------------------------- |
+| `protocol.mts`                  | Fixed v0.5 constants and migration guidance                   |
+| `config.mts`                    | Three-input action boundary and GitHub environment derivation |
+| `receipt.mts`                   | Repository-bound restore receipt under `RUNNER_TEMP`          |
+| `github-api.mts`                | GitHub API pagination, bounded retries, and reconciliation    |
+| `manifest.mts`                  | Strict v1 schema and canonical serialization                  |
+| `state-bundle.mts`              | Legacy/v0.4 classification, verification, and migration gate  |
+| `state-manager.mts`             | Restore, save, optimistic consistency, and rollback           |
+| `backup-manager.mts`            | Verified backup creation, compensation, and retention         |
+| `reset.mts` / `reset-core.mts`  | Full reset and exact-backup promotion                         |
+| `terraform-config.mts`          | Structural import-target scanner                              |
+| `imports.mts` / `import-pr.mts` | Fixed proposal and protected PR branch refresh                |
+| `state-files.mts`               | Symlink-safe workspace reads and writes                       |
+| `errors.mts`                    | Stable machine-readable failures                              |
 
-## Guarantees
+## Storage layout
 
-- Restore and import validate the remote state before use and do not update an
-  existing Release or its metadata.
-- Save rejects a changed remote marker and never uses silent last-write-wins.
-- Current and backup state use a versioned canonical manifest with stored and
-  plaintext digest/size bindings, Terraform correlation metadata, encryption,
-  parent, and provenance fields. The lineage field is an infrastructure
-  correlation identifier and is never interpreted as a credential.
-- Optional detached Ed25519 signatures cover a domain separator plus the exact
-  canonical manifest bytes. Multiple verification keys support rotation.
-- Newly uploaded backup and current bundle objects are downloaded, hashed,
-  parsed, and checked for binding before they are accepted.
-- A present manifest is authoritative. Invalid manifests and signatures never
-  fall back to legacy metadata.
-- Legacy current state remains readable. A successful save migrates it in the
-  same flat namespace; legacy age state needs an identity before mutation and
-  its backup is re-encrypted for the configured recipients.
-- A verified current-state replacement is reported as committed before
-  post-commit retention and orphan maintenance; maintenance failure preserves
-  the authoritative marker in machine-readable outputs while failing the step.
-- Reset audits the managed namespace and treats `404` deletes as idempotent.
-- Local state writes are workspace-contained and use restrictive permissions.
-- Import generation suppresses targets already declared in non-generated `.tf`
-  files below the configured Terraform root.
-- Import PR refreshes compare complete recursive trees from the merge base and
-  permit only the generated path.
-- Terraform scan roots and local diff inputs are checked lexically and through
-  `realpath`; symlink roots, symlink path components, and workspace escapes are
-  rejected. PR mode does not read the local generated imports file.
-
-Stale action-only branches are refreshed with a Git commit whose tree is the
-current base plus the generated file and whose parents are the observed branch
-head and current base SHA. The action rechecks the expected head and advances
-the ref with `force: false`. The first parent preserves fast-forward race
-safety; the second makes current base an ancestor so the PR does not replay
-changes already merged into base.
-
-GitHub Release replacement is not atomic and does not provide backend-style
-transactions or locking. Consumer workflows must serialize writers.
-
-## Flat bundle layout
-
-For object name `<object>`, v0.4 writes `<object>`,
-`<object>.manifest.json`, optional `<object>.manifest.sig.json`, and the
-v0.3-compatible `<object>.metadata.json` where required. Current state keeps
-the configured `state-asset` name; backups keep the existing
-`<state-asset>.backup-*` namespace. There is no implicit namespace relocation.
-
-Both manifest and signature JSON use schema-owned field order, two-space
-indentation, UTF-8, and one trailing line feed. Readers strictly validate the
-schema, reserialize it, and require byte equality. Signature payloads are:
+Current state consists of:
 
 ```text
-UTF8("terraform-release-state/manifest-signature/v1\n")
-|| canonical_manifest_bytes
+terraform.tfstate
+terraform.tfstate.manifest.json
 ```
 
-Retention deletes signed backup companions in fail-closed order: signature,
-manifest, legacy metadata, then state. A failure stops the sequence.
+Each backup consists of:
 
-## Verification
+```text
+terraform.tfstate.backup-<timestamp>-<run>-<uuid>
+terraform.tfstate.backup-<...>.metadata.json
+terraform.tfstate.backup-<...>.manifest.json
+```
 
-Unit tests use the Node.js Native Test Runner with a mocked GitHub API.
-Integration tests use disposable Release namespaces and cover bootstrap,
-description, consistency conflicts, retention, encryption integrity,
-recovery, and reset. Runtime behavior changes require rebuilding `dist`.
-Release Please depends on this reusable integration workflow and therefore
-cannot create or publish a release before the exact candidate SHA passes it.
+The compatibility metadata binds a backup to `terraform.tfstate` and its
+stored digest. The canonical manifest binds object role/name, stored and
+plaintext SHA-256 and size, Terraform version/serial/lineage when parseable,
+parent marker/digest, plaintext encryption mode, and GitHub provenance.
+Lineage is an infrastructure correlation identifier, not a secret or state
+value.
+
+Manifests use schema-owned field order, two-space JSON indentation, UTF-8, and
+one trailing line feed. Readers strictly validate and reserialize for byte
+equality. The manifest is uploaded last and is the flat-bundle completion
+signal.
+
+## Consistency and recovery
+
+Restore writes a receipt containing the exact observed state marker. It is
+bound to repository, Release tag, and asset name, stored as a regular mode-0600
+file, and cannot be supplied through action inputs. Save requires the receipt
+and fails if current state appeared, disappeared, or changed.
+
+Before mutation, save verifies every complete managed bundle and rejects any
+encrypted or signed object. It then verifies a new safety backup, repeats its
+current-bundle comparison, deletes/replaces current state, and downloads the
+replacement. Failure removes only observed replacement objects and restores
+the previously verified bytes with manifest last.
+
+Once replacement verification succeeds, the new marker is authoritative.
+Receipt update and retention are post-commit maintenance; their failure leaves
+machine-readable committed state and recovery guidance while failing the step.
+
+Exact-backup reset uses the same rules. It keeps the selected backup, creates a
+new safety backup when current exists, compares both observed bundles before
+replacement, promotes with a new current manifest, and fully rolls back partial
+replacement. Promotion deliberately skips retention.
+
+GitHub Release replacement is not a transactional Terraform backend and GitHub
+does not provide locking. Protected workflows must serialize all writers.
+
+## Import branch graph safety
+
+Import always targets `terraform/imports.generated.tf` on a fixed action-owned
+branch against `main`. The action compares complete recursive trees from the
+merge base and permits only that path.
+
+A stale branch is rebuilt with the latest-base-plus-generated tree and parents
+`[observed branch head, current base SHA]`. The observed head preserves
+fast-forward race safety; the second parent makes current base an ancestor so
+the pull request does not replay already-merged base changes. The ref update
+rechecks the expected SHA and uses `force: false`.
+
+## Compatibility
+
+v0.5 dual-reads legacy plaintext and unsigned plaintext manifest-v1 storage.
+Age ciphertext, age metadata, and detached signature assets produce
+`TRS_V04_MIGRATION_REQUIRED` before mutation. The action contains no age runtime
+or signing key path and performs no implicit downgrade or relocation.

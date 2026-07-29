@@ -1,78 +1,35 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-const {
-  parseBoolean,
-  parseRepository,
-  parseRetention,
-  resolveStatePath,
-  validateGitRef,
-  validateReleaseComponent,
-} = await import(
+
+const { isPathInside, parseBoolean, resolveWorkspacePath } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/validation.mjs"
 );
-const { validateResetConfirmation } = await import(
-  // @ts-expect-error This source module is compiled into the temporary native-test build.
-  "../.test-build/src/reset-core.mjs"
-);
 
-test("validates action inputs", async (t) => {
-  await t.test("parses booleans and retention", () => {
-    assert.equal(parseBoolean("true", "bootstrap"), true);
-    assert.equal(parseBoolean("", "bootstrap"), false);
-    assert.equal(parseRetention("20"), 20);
-    assert.throws(() => parseBoolean("yes", "bootstrap"), /must be true/);
-    assert.throws(() => parseRetention("1001"), /0 through 1000/);
-  });
-
-  await t.test("validates repository and release components", () => {
-    assert.deepEqual(parseRepository("go-min/state"), {
-      owner: "go-min",
-      repo: "state",
-    });
-    assert.throws(() => parseRepository("go-min/state/extra"), /owner\/name/);
-    assert.doesNotThrow(() =>
-      validateReleaseComponent("terraform-state", "tag"),
-    );
+test("validates the bootstrap environment and fixed workspace paths", async (t) => {
+  await t.test("accepts only exact bootstrap booleans", () => {
+    assert.equal(parseBoolean("true", "TERRAFORM_BOOTSTRAP"), true);
+    assert.equal(parseBoolean("", "TERRAFORM_BOOTSTRAP"), false);
     assert.throws(
-      () => validateReleaseComponent("../state", "tag"),
-      /unsupported/,
+      () => parseBoolean("yes", "TERRAFORM_BOOTSTRAP"),
+      /must be true or false/,
     );
   });
 
-  await t.test("keeps state paths inside the workspace", () => {
+  await t.test("keeps fixed paths inside the workspace", () => {
     assert.equal(
-      resolveStatePath("state/terraform.tfstate", "/workspace"),
-      "/workspace/state/terraform.tfstate",
+      resolveWorkspacePath(
+        "terraform.tfstate",
+        "fixed state path",
+        "/workspace",
+      ),
+      "/workspace/terraform.tfstate",
     );
-    assert.equal(
-      resolveStatePath("..state/terraform.tfstate", "/workspace"),
-      "/workspace/..state/terraform.tfstate",
-    );
+    assert.equal(isPathInside("/workspace", "/workspace/terraform"), true);
+    assert.equal(isPathInside("/workspace", "/outside/terraform"), false);
     assert.throws(
-      () => resolveStatePath("../terraform.tfstate", "/workspace"),
-      /inside/,
-    );
-    assert.throws(() => resolveStatePath("", "/workspace"), /non-empty/);
-  });
-
-  await t.test("validates pull request branch refs", () => {
-    assert.doesNotThrow(() =>
-      validateGitRef("terraform-release-state/generated", "branch"),
-    );
-    assert.throws(() => validateGitRef("../main", "branch"), /unsupported/);
-    assert.throws(() => validateGitRef("main:broken", "branch"), /unsupported/);
-  });
-
-  await t.test("requires explicit reset confirmation", () => {
-    assert.doesNotThrow(() => validateResetConfirmation("RESET"));
-    assert.throws(
-      () => validateResetConfirmation("reset"),
-      /confirmation=RESET/,
-    );
-    assert.throws(
-      () => validateResetConfirmation(""),
-      /no state resources were changed/,
+      () => resolveWorkspacePath("../state", "fixed path", "/workspace"),
+      /inside GITHUB_WORKSPACE/,
     );
   });
 });
