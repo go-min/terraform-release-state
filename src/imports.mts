@@ -230,6 +230,7 @@ export async function generateImports(
   context: StateManagerContext,
 ): Promise<void> {
   const { config } = context;
+  const createPr = config.createPr !== false;
   const rawState = await readStoredState(context);
   let state: TerraformState;
   try {
@@ -260,17 +261,21 @@ export async function generateImports(
   const generated = renderImports(proposedCandidates);
   const relativePath = relative(config.workspace, outputPath);
   const repositoryPath = relativePath.replaceAll("\\", "/");
-  const result = await prepareImportPullRequest(
-    context,
-    repositoryPath,
-    Buffer.from(generated),
-    proposedCandidates.length,
-    allSkipped.length,
-    collisions.length,
-  );
-  const current = result.baseContent.toString("utf8");
-  const pullRequestUrl = result.url;
-  const pullRequestAction = result.action;
+  const result = createPr
+    ? await prepareImportPullRequest(
+        context,
+        repositoryPath,
+        Buffer.from(generated),
+        proposedCandidates.length,
+        allSkipped.length,
+        collisions.length,
+      )
+    : undefined;
+  const current = result
+    ? result.baseContent.toString("utf8")
+    : localImportsDiffBase(config.workspace, outputPath, false);
+  const pullRequestUrl = result?.url;
+  const pullRequestAction = result?.action || "disabled";
   core.setOutput("operation", "import");
   core.setOutput("import-candidate-count", proposedCandidates.length);
   core.setOutput("import-skipped-count", allSkipped.length);
@@ -288,7 +293,9 @@ export async function generateImports(
     return;
   }
   core.info(
-    "Import proposals: proposed diff (workspace file was not modified; the action-owned PR branch may be updated):",
+    createPr
+      ? "Import proposals: proposed diff (workspace file was not modified; the action-owned PR branch may be updated):"
+      : "Import proposals: proposed diff (file was not modified):",
   );
   core.info(diffLines(current, generated, relativePath));
 }

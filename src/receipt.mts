@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
@@ -25,11 +25,20 @@ export function restoreReceiptPath(
   runnerTemp: string,
   owner: string,
   repo: string,
+  tag = "terraform-state",
+  asset = "terraform.tfstate",
 ): string {
+  const legacy = tag === "terraform-state" && asset === "terraform.tfstate";
+  const namespace = legacy
+    ? `${owner}-${repo}`
+    : `${owner}-${repo}-${createHash("sha256")
+        .update(`${tag}\n${asset}`, "utf8")
+        .digest("hex")
+        .slice(0, 16)}`;
   return join(
     runnerTemp,
     "terraform-release-state",
-    `${owner}-${repo}-restore-receipt.json`,
+    `${namespace}-restore-receipt.json`,
   );
 }
 

@@ -35,8 +35,8 @@ the final Conventional Commit message. Do not use free-form titles such as
 3. Merge the pull request into `main` using squash merge.
 4. The release workflow rebuilds the exact merged candidate SHA, runs the
    action boundary against a deterministic local GitHub API fixture, and then
-   performs a minimal live bootstrap/save/restore/reset cycle in the action
-   repository's fixed `terraform-state` namespace. The live cycle refuses to
+   performs a minimal live bootstrap/save/restore/reset cycle in a disposable,
+   exact-candidate tag in the action repository. The live cycle refuses to
    start unless the Release and tag are both absent, atomically binds the tag
    to the exact candidate SHA, guards cleanup by that identity, and verifies
    both objects are absent afterward. Release Please cannot start before the

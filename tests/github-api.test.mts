@@ -273,7 +273,10 @@ test("createRelease documents the managed state without exposing its contents", 
   assert.match(body, /`terraform-state`/);
   assert.match(body, /`terraform\.tfstate`/);
   assert.match(body, /`terraform\.tfstate\.backup-\*`/);
-  assert.match(body, /plaintext unsigned state/);
+  assert.match(
+    body,
+    /plaintext unsigned state.*optional cryptographic protections/s,
+  );
   assert.match(body, /retains 20 verified backups/);
   assert.match(body, /github\.com\/go-min\/terraform-release-state/);
   assert.doesNotMatch(body, /state-sha256|credentials|age encryption/i);

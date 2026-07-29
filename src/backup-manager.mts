@@ -4,9 +4,11 @@ import {
   createBackupName,
   manifestName,
   metadataName,
+  signatureName,
   type BundleAssets,
 } from "./asset-names.mjs";
 import { failWithCode } from "./errors.mjs";
+import { encryptState } from "./encryption.mjs";
 import {
   deleteAsset,
   downloadAsset,
@@ -15,6 +17,7 @@ import {
 } from "./github-api.mjs";
 import { sha256 } from "./integrity.mjs";
 import { marker } from "./marker.mjs";
+import { ageRecipientsFingerprint } from "./manifest.mjs";
 import {
   compatibilityBackupMetadata,
   createBundleData,
@@ -41,6 +44,7 @@ async function backupBundleData(
     const metadata = compatibilityBackupMetadata({
       stored: previous.stored,
       currentAsset: current.name,
+      encryption: previous.manifest.encryption.mode,
       sourceCommit: config.sourceCommit,
       workflowRunId: config.workflowRunId,
       actionVersion: actionVersion(),
@@ -62,6 +66,7 @@ async function backupBundleData(
         },
       },
       previous.stored,
+      context,
       metadata,
     );
   }
@@ -71,10 +76,16 @@ async function backupBundleData(
       "Legacy state must be available as verified plaintext before backup creation.",
     );
   }
-  const stored = previous.stored;
+  const encryption = config.encryption || {
+    mode: "none" as const,
+    recipients: [],
+    identities: [],
+  };
+  const stored = await encryptState(encryption, previous.plaintext);
   const metadata = compatibilityBackupMetadata({
     stored,
     currentAsset: current.name,
+    encryption: encryption.mode,
     sourceCommit: config.sourceCommit,
     workflowRunId: config.workflowRunId,
     actionVersion: actionVersion(),
@@ -86,8 +97,11 @@ async function backupBundleData(
       name,
       stored,
       plaintext: previous.plaintext,
-      encryptionMode: "none",
-      encryptionKeyFingerprint: null,
+      encryptionMode: encryption.mode,
+      encryptionKeyFingerprint:
+        encryption.mode === "age"
+          ? ageRecipientsFingerprint(encryption.recipients)
+          : null,
       parentMarker: marker(current),
       parentStoredSha256: sha256(previous.stored),
       sourceCommit: config.sourceCommit,
@@ -95,6 +109,7 @@ async function backupBundleData(
       actionVersion: actionVersion(),
       createdAt,
     },
+    context,
     metadata,
   );
 }
@@ -121,6 +136,16 @@ async function uploadBundle(
       release.id,
       metadataName(name),
       data.metadata,
+      "application/json",
+    );
+  }
+  if (data.signature) {
+    uploaded.signature = await uploadAsset(
+      octokit,
+      config.target,
+      release.id,
+      signatureName(name),
+      data.signature,
       "application/json",
     );
   }
@@ -160,6 +185,7 @@ async function assertUploadedBytes(
   const entries: Array<[Asset | undefined, Buffer | undefined, string]> = [
     [uploaded.state, expected.state, "state"],
     [uploaded.metadata, expected.metadata, "metadata"],
+    [uploaded.signature, expected.signature, "signature"],
     [uploaded.manifest, expected.manifest, "manifest"],
   ];
   for (const [asset, data, kind] of entries) {

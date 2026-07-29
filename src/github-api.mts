@@ -120,7 +120,7 @@ export function managedReleaseBody(
 - **State manifest:** \`${manifestName(assetName)}\`
 - **Recovery backups:** \`${assetName}.backup-*\` with matching manifest and compatibility metadata assets
 
-The current state asset and its manifest are authoritative. v0.5 stores only plaintext unsigned state and retains 20 verified backups. If the state asset is absent, protected bootstrap created this storage and it is awaiting its first save. The action validates asset integrity and refuses stale writes through an internal restore receipt.
+The current state asset and its manifest are authoritative. The default protocol stores plaintext unsigned state and retains 20 verified backups; optional cryptographic protections are configured by the workflow. If the state asset is absent, protected bootstrap created this storage and it is awaiting its first save. The action validates asset integrity and refuses stale writes through an internal restore receipt.
 
 Managed by [Terraform Release State](${actionUrl}). See the [documentation](${actionUrl}#readme) and [recovery guide](${actionUrl}/blob/main/docs/recovery.md) before changing any asset manually.`;
 }

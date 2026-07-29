@@ -58,9 +58,9 @@ test("config derives the complete zero-config protocol from GitHub context", () 
         assert.equal(config.bootstrap, true);
         assert.equal(
           config.importsPath,
-          join(workspace, "terraform/imports.generated.tf"),
+          join(workspace, "imports.generated.tf"),
         );
-        assert.equal(config.terraformRoot, join(workspace, "terraform"));
+        assert.equal(config.terraformRoot, workspace);
         assert.equal(config.prBase, "main");
         assert.equal(
           config.prBranch,
@@ -112,7 +112,7 @@ test("config defaults reset-target to all and rejects it for other operations", 
   }
 });
 
-test("bootstrap accepts only the exact environment boundary", () => {
+test("bootstrap input is canonical and the environment is a strict fallback", () => {
   const workspace = mkdtempSync(join(tmpdir(), "trs-config-bootstrap-"));
   const runnerTemp = mkdtempSync(join(tmpdir(), "trs-config-runner-"));
   try {
@@ -124,10 +124,80 @@ test("bootstrap accepts only the exact environment boundary", () => {
         INPUT_OPERATION: "restore",
         INPUT_GITHUB_TOKEN: "token",
         INPUT_RESET_TARGET: undefined,
+        INPUT_BOOTSTRAP: "true",
+        TERRAFORM_BOOTSTRAP: "TRUE",
+      },
+      () => assert.equal(readConfig().bootstrap, true),
+    );
+    withEnvironment(
+      {
+        GITHUB_REPOSITORY: "go-min/state",
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+        INPUT_OPERATION: "restore",
+        INPUT_GITHUB_TOKEN: "token",
+        INPUT_BOOTSTRAP: "false",
+        TERRAFORM_BOOTSTRAP: "true",
+      },
+      () => assert.equal(readConfig().bootstrap, false),
+    );
+    withEnvironment(
+      {
+        GITHUB_REPOSITORY: "go-min/state",
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+        INPUT_OPERATION: "restore",
+        INPUT_GITHUB_TOKEN: "token",
+        INPUT_BOOTSTRAP: undefined,
         TERRAFORM_BOOTSTRAP: "TRUE",
       },
       () =>
         assert.throws(readConfig, /TERRAFORM_BOOTSTRAP must be true or false/),
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(runnerTemp, { recursive: true, force: true });
+  }
+});
+
+test("config accepts explicit storage, crypto, and import overrides", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-config-overrides-"));
+  const runnerTemp = mkdtempSync(join(tmpdir(), "trs-config-runner-"));
+  try {
+    withEnvironment(
+      {
+        GITHUB_REPOSITORY: "go-min/workflow",
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+        INPUT_OPERATION: "import",
+        INPUT_GITHUB_TOKEN: "token",
+        INPUT_STATE_REPOSITORY: "go-min/state-storage",
+        INPUT_RELEASE_TAG: "team-state",
+        INPUT_STATE_ASSET: "network.tfstate",
+        INPUT_STATE_PATH: "state/network.tfstate",
+        INPUT_BACKUP_RETENTION: "7",
+        INPUT_TERRAFORM_ROOT: "terraform",
+        INPUT_IMPORTS_PATH: "terraform/imports.generated.tf",
+        INPUT_CREATE_PR: "false",
+        INPUT_ENCRYPTION: "none",
+        INPUT_SIGNATURE_POLICY: "allow-unsigned",
+      },
+      () => {
+        const config = readConfig();
+        assert.deepEqual(config.target, {
+          owner: "go-min",
+          repo: "state-storage",
+        });
+        assert.equal(config.tag, "team-state");
+        assert.equal(config.assetName, "network.tfstate");
+        assert.equal(
+          config.statePath,
+          join(workspace, "state/network.tfstate"),
+        );
+        assert.equal(config.backupRetention, 7);
+        assert.equal(config.createPr, false);
+        assert.equal(config.terraformRoot, join(workspace, "terraform"));
+      },
     );
   } finally {
     rmSync(workspace, { recursive: true, force: true });

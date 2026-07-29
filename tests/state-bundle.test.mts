@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
+import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
+import { generateIdentity, identityToRecipient } from "age-encryption";
 
 const { assertNoUnsupportedStorage, createBundleData, loadStateBundle } =
   await import(
@@ -9,6 +11,14 @@ const { assertNoUnsupportedStorage, createBundleData, loadStateBundle } =
 const { createManifest, parseManifest, serializeManifest } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/manifest.mjs"
+);
+const { encryptState } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/encryption.mjs"
+);
+const { publicKeyInputFromPrivateKey } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/signing.mjs"
 );
 
 function baseConfig() {
@@ -133,29 +143,89 @@ test("manifest bundle detects downloaded state corruption", async () => {
   );
 });
 
-test("v0.5 refuses to create encrypted or stored/plaintext-divergent bundles", () => {
+test("v0.6 creates manifests that distinguish encrypted stored and plaintext bytes", () => {
   const plaintext = Buffer.from("plaintext");
-  assert.throws(
-    () =>
-      createBundleData({
-        role: "current",
-        name: "terraform.tfstate",
-        stored: Buffer.from("ciphertext"),
-        plaintext,
-        encryptionMode: "age",
-        encryptionKeyFingerprint:
-          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        parentMarker: null,
-        parentStoredSha256: null,
-        sourceCommit: "source",
-        workflowRunId: "run",
-        actionVersion: "v0.5.0",
-      }),
-    /plaintext unsigned/,
+  const bundle = createBundleData({
+    role: "current",
+    name: "terraform.tfstate",
+    stored: Buffer.from("ciphertext"),
+    plaintext,
+    encryptionMode: "age",
+    encryptionKeyFingerprint:
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    parentMarker: null,
+    parentStoredSha256: null,
+    sourceCommit: "source",
+    workflowRunId: "run",
+    actionVersion: "v0.5.0",
+  });
+  const parsed = parseManifest(bundle.manifest);
+  assert.equal(parsed.encryption.mode, "age");
+  assert.notEqual(
+    parsed.content.stored.sha256,
+    parsed.content.plaintext.sha256,
   );
 });
 
-test("encrypted v0.4 manifest fails with the migration code", async () => {
+test("dual-reads a v0.4 age-encrypted signed manifest bundle", async () => {
+  const identity = await generateIdentity();
+  const recipient = await identityToRecipient(identity);
+  const plaintext = Buffer.from('{"serial":4,"lineage":"v04"}');
+  const stored = await encryptState(
+    { mode: "age", recipients: [recipient], identities: [identity] },
+    plaintext,
+  );
+  const pair = generateKeyPairSync("ed25519");
+  const privateKey = pair.privateKey.export({
+    format: "pem",
+    type: "pkcs8",
+  }) as string;
+  const publicKey = publicKeyInputFromPrivateKey(privateKey);
+  const config = {
+    ...(baseConfig() as unknown as Record<string, unknown>),
+    encryption: {
+      mode: "age",
+      recipients: [recipient],
+      identities: [identity],
+    },
+    signing: {
+      policy: "allow-unsigned",
+      privateKeyPem: privateKey,
+      verificationKeys: [publicKey],
+    },
+  };
+  const data = createBundleData(
+    {
+      role: "current",
+      name: "terraform.tfstate",
+      stored,
+      plaintext,
+      encryptionMode: "age",
+      encryptionKeyFingerprint:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      parentMarker: null,
+      parentStoredSha256: null,
+      sourceCommit: "source",
+      workflowRunId: "run",
+      actionVersion: "v0.4.0",
+    },
+    { octokit: {} as never, config } as never,
+  );
+  const remote = remoteBundle(data);
+  const loaded = await loadStateBundle(
+    { octokit: remote.octokit, config } as never,
+    remote.assets as never,
+    "terraform.tfstate",
+    "current",
+    { plaintext: "required" },
+  );
+  assert.deepEqual(loaded.plaintext, plaintext);
+  assert.equal(loaded.signature.status, "verified");
+  assert.equal(loaded.storedVerification, "verified");
+  assert.equal(loaded.plaintextVerification, "verified");
+});
+
+test("encrypted manifests require their compatibility metadata", async () => {
   const ciphertext = Buffer.from("age-encryption.org/v1\nencrypted");
   const manifest = serializeManifest(
     createManifest({
@@ -186,12 +256,11 @@ test("encrypted v0.4 manifest fails with the migration code", async () => {
     (error: unknown) =>
       error instanceof Error &&
       "code" in error &&
-      error.code === "TRS_V04_MIGRATION_REQUIRED" &&
-      /fb529572/.test(error.message),
+      error.code === "TRS_OBJECT_SET_INCOMPLETE",
   );
 });
 
-test("signed bundle fails before state or signature bytes are downloaded", async () => {
+test("invalid signed bundle fails closed", async () => {
   const data = bundleData();
   const remote = remoteBundle({ ...data, signature: Buffer.from("signed") });
   await assert.rejects(
@@ -205,12 +274,12 @@ test("signed bundle fails before state or signature bytes are downloaded", async
     (error: unknown) =>
       error instanceof Error &&
       "code" in error &&
-      error.code === "TRS_V04_MIGRATION_REQUIRED",
+      error.code === "TRS_SIGNATURE_INVALID",
   );
-  assert.equal(remote.downloads(), 0);
+  assert.ok(remote.downloads() > 0);
 });
 
-test("legacy age metadata and ciphertext are rejected during preflight", async () => {
+test("legacy age metadata corruption is rejected during preflight", async () => {
   const ciphertext = Buffer.from("age-encryption.org/v1\nencrypted");
   const metadata = Buffer.from(
     '{"format_version":1,"encryption":"age","ciphertext_sha256":"0000000000000000000000000000000000000000000000000000000000000000","action_version":"v0.4.0"}\n',
@@ -224,6 +293,6 @@ test("legacy age metadata and ciphertext are rejected during preflight", async (
     (error: unknown) =>
       error instanceof Error &&
       "code" in error &&
-      error.code === "TRS_V04_MIGRATION_REQUIRED",
+      error.code === "TRS_STORED_DIGEST_MISMATCH",
   );
 });

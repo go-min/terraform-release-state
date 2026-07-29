@@ -1,95 +1,30 @@
 # Recovery and reset
 
-Recovery is an operator decision in a protected workflow. The action never
-runs Terraform, recreates infrastructure, or guesses which backup is correct.
+Recovery is an operator decision in a protected workflow. The action never runs
+Terraform, recreates infrastructure, or chooses a backup automatically.
 
-## Failure responses
+| Signal                                                 | Response                                                                                              |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `TRS_RESTORE_RECEIPT_REQUIRED` or `TRS_REMOTE_CHANGED` | Stop and run restore again in the same serialized job.                                                |
+| Digest, manifest, signature, or decryption failure     | Stop Terraform. Preserve Release assets and investigate keys/bytes; do not promote unverified data.   |
+| `TRS_DECRYPTION_FAILED`                                | Supply the matching `age-identities`; this does not mean a plaintext digest mismatch.                 |
+| `TRS_SIGNATURE_REQUIRED`                               | Supply a matching verification key, and a private signing key before replacing signed current state.  |
+| `state-status=maintenance-failed`                      | The emitted marker is authoritative. Run restore before another save and repair retention separately. |
+| Import branch unrelated changes                        | Preserve/review them; the action intentionally refuses overwrite.                                     |
 
-| Failure                           | Required response                                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------- |
-| Release/state absent              | Investigate access or deletion; use protected bootstrap only after approval       |
-| `TRS_RESTORE_RECEIPT_REQUIRED`    | Run restore in the same job before save                                           |
-| `TRS_REMOTE_CHANGED`              | Stop; inspect the competing writer and restore again                              |
-| Manifest or digest failure        | Stop Terraform; do not promote unverified bytes                                   |
-| `TRS_V04_MIGRATION_REQUIRED`      | Pin v0.4.0, decrypt/verify there, and migrate to plaintext unsigned storage       |
-| Save/promotion rollback failure   | Preserve local state and inspect current plus safety backups before mutation      |
-| `state-status=maintenance-failed` | Trust the emitted committed marker, run restore, then repair retention separately |
-| Import branch unrelated changes   | Preserve the branch and move/review those changes before rerun                    |
+`reset-target: all` requires workflow-owned exact confirmation. It audits only
+the configured state namespace, then deletes assets, Release, and tag. An exact
+`state-asset.backup-*` target verifies selected/current bundles, creates and
+verifies a safety backup, rechecks markers, and promotes with manifest last.
+The target remains. Failed replacement removes observed partial current objects
+and restores the full previous bundle.
 
-Active v0.5 failures use stable codes: `TRS_CONFIG_INVALID`,
-`TRS_OBJECT_NOT_FOUND`, `TRS_OBJECT_SET_INCOMPLETE`,
-`TRS_MANIFEST_INVALID`, `TRS_MANIFEST_UNSUPPORTED_VERSION`,
-`TRS_MANIFEST_OBJECT_MISMATCH`, `TRS_STORED_DIGEST_MISMATCH`,
-`TRS_PLAINTEXT_DIGEST_MISMATCH`, `TRS_V04_MIGRATION_REQUIRED`,
-`TRS_RESTORE_RECEIPT_REQUIRED`, `TRS_RESTORE_RECEIPT_INVALID`,
-`TRS_REMOTE_CHANGED`, `TRS_API_FAILURE`, and `TRS_UNEXPECTED`. Older v0.4
-crypto-specific codes remain reserved for output compatibility, but v0.5 has
-no key or decryption execution path.
+Bootstrap is canonical input `bootstrap: true` on protected restore. The legacy
+`TERRAFORM_BOOTSTRAP=true` fallback works only when the input was omitted.
+Bootstrap creates an empty Release and absent-state receipt; save then publishes
+the first local state.
 
-Never promote an older backup merely because it is newest by timestamp. Review
-its Terraform serial, lineage correlation identifier, source workflow, and the
-history of any partially successful apply.
-
-## Reset all
-
-`reset-target: all` audits the fixed `terraform-state` Release. It refuses
-unrelated assets and encrypted/signed managed storage, then deletes the owned
-assets, Release, and tag. Missing resources are already-reset success.
-
-Confirmation is not an action input. The existing protected reset workflow
-must require exact `RESET` confirmation before it invokes the action.
-
-```yaml
-- name: Delete approved state storage
-  if: ${{ inputs.confirmation == 'RESET' }}
-  uses: go-min/terraform-release-state@<v0.5.0-release-commit-sha> # v0.5.0
-  with:
-    operation: reset
-    github-token: ${{ github.token }}
-    reset-target: all
-```
-
-## Promote one backup
-
-Supply the exact backup state object name, not its metadata or manifest:
-
-```yaml
-- name: Promote approved backup
-  if: ${{ inputs.confirmation == 'RESET' }}
-  uses: go-min/terraform-release-state@<v0.5.0-release-commit-sha> # v0.5.0
-  with:
-    operation: reset
-    github-token: ${{ github.token }}
-    reset-target: terraform.tfstate.backup-20260729T100000000Z-run-uuid
-```
-
-Promotion validates the exact target and current bundle, creates and verifies a
-safety backup of current when present, repeats marker checks, replaces current
-state with manifest last, and downloads it for verification. The selected
-backup is not deleted or renamed.
-
-If replacement fails, every observed partial current object is removed and the
-complete prior current bundle is restored and verified. If current was absent,
-recovery ensures no partial current remains. A safety backup created before a
-later CAS conflict may remain intentionally.
-
-Successful promotion emits `reset-action=promoted`, the exact `reset-target`,
-`reset-promoted-marker`, and the standard committed lifecycle outputs. Run
-restore before any subsequent save. The next save, not promotion, enforces
-retention 20.
-
-## Clean bootstrap
-
-After approved `reset-target: all`, set `TERRAFORM_BOOTSTRAP=true` only on the
-protected bootstrap job and run restore. It creates an empty Release and an
-absent-state receipt. Terraform must create repository-root
-`terraform.tfstate`; save then verifies and publishes it.
-
-## Encrypted or signed v0.4 storage
-
-v0.5 cannot decrypt or verify signatures and will not discard their security
-properties implicitly. Use immutable v0.4.0
-`fb529572e17d20c414afacc7a7e14ffa0033058d` with the original identities or
-verification keys to restore and validate the state. Convert it deliberately
-to plaintext unsigned storage before upgrading. Do not manually delete only a
-metadata or signature companion.
+v0.6 reads v0.4 age/signed and v0.5 plaintext manifests in their original
+namespace. Provide the original age identity and verification key; do not delete
+metadata or signature companions. A crypto migration happens only through an
+authenticated save or reset promotion.

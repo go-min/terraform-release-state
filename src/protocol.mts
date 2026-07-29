@@ -3,11 +3,8 @@ export const STATE_ASSET_NAME = "terraform.tfstate";
 export const STATE_PATH = "terraform.tfstate";
 export const BACKUP_RETENTION = 20;
 
-export const TERRAFORM_ROOT = "terraform";
-export const IMPORTS_PATH = "terraform/imports.generated.tf";
-export const IMPORT_PR_BASE = "main";
-export const IMPORT_PR_BRANCH = "terraform-release-state/imports.generated.tf";
-export const IMPORT_PR_TITLE = "chore(terraform): update generated imports";
+export const TERRAFORM_ROOT = ".";
+export const IMPORTS_PATH = "./imports.generated.tf";
 
 export const V04_MIGRATION_HINT =
-  "Pin go-min/terraform-release-state@fb529572e17d20c414afacc7a7e14ffa0033058d (v0.4.0), restore and verify the state with its original age identities or Ed25519 verification keys, then save or reset it as plaintext unsigned storage before using v0.5.";
+  "v0.6 dual-reads v0.4 age and signed bundles when the matching age identities and verification keys are supplied. Do not remove companion assets or relocate the Release namespace during migration.";

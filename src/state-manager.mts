@@ -4,9 +4,11 @@ import {
   bundleAssets,
   manifestName,
   metadataName,
+  signatureName,
   type BundleAssets,
 } from "./asset-names.mjs";
 import { createBackup, retainBackups } from "./backup-manager.mjs";
+import { encryptState } from "./encryption.mjs";
 import { failWithCode } from "./errors.mjs";
 import {
   createRelease,
@@ -19,6 +21,7 @@ import {
   uploadAsset,
 } from "./github-api.mjs";
 import { assetDigest, sha256 } from "./integrity.mjs";
+import { ageRecipientsFingerprint } from "./manifest.mjs";
 import { marker, sameAssetMarker, sameMarker } from "./marker.mjs";
 import {
   createBundleData,
@@ -30,6 +33,45 @@ import {
 import { readStateFile, writeStateFile } from "./state-files.mjs";
 import { readRestoreReceipt, writeRestoreReceipt } from "./receipt.mjs";
 import type { Asset, Release, StateManagerContext } from "./types.mjs";
+
+function encryptionConfig(context: StateManagerContext) {
+  return (
+    context.config.encryption || {
+      mode: "none" as const,
+      recipients: [],
+      identities: [],
+    }
+  );
+}
+
+/**
+ * A replacement must never silently weaken a protected current bundle.  We
+ * load every bundle before mutation, but an age bundle can intentionally be
+ * loaded without an identity during inventory.  Saving over it is different:
+ * it needs the verified plaintext for the rollback bundle.  Likewise, a
+ * signed current must be re-signed rather than converted to unsigned bytes.
+ */
+function assertCurrentCanBeReplaced(
+  context: StateManagerContext,
+  previous: LoadedStateBundle | undefined,
+): void {
+  if (!previous) return;
+  if (previous.manifest?.encryption.mode === "age" && !previous.plaintext) {
+    failWithCode(
+      "TRS_DECRYPTION_FAILED",
+      "age-identities is required to verify and preserve the existing encrypted state before save.",
+    );
+  }
+  if (
+    previous.signature.status === "verified" &&
+    !context.config.signing?.privateKeyPem
+  ) {
+    failWithCode(
+      "TRS_SIGNATURE_REQUIRED",
+      "signing-private-key is required to preserve the existing signed state before save.",
+    );
+  }
+}
 
 function emitVerificationOutputs(bundle: LoadedStateBundle): void {
   core.setOutput("storage-format", bundle.format);
@@ -51,8 +93,8 @@ function emitVerificationOutputs(bundle: LoadedStateBundle): void {
     core.warning(
       `[${warning}] ${
         warning === "TRS_LEGACY_UNSIGNED"
-          ? "State uses the unsigned legacy storage format; a successful v0.5 save migrates it in place."
-          : "State manifest uses the v0.4 unsigned compatibility format."
+          ? "State uses the unsigned legacy storage format; a successful save migrates it in place."
+          : "State manifest is unsigned because signature-policy=allow-unsigned."
       }`,
     );
   }
@@ -93,7 +135,7 @@ async function getOrBootstrapRelease(
   if (!config.bootstrap) {
     failWithCode(
       "TRS_OBJECT_NOT_FOUND",
-      `State release ${config.tag} does not exist; set TERRAFORM_BOOTSTRAP=true only in the protected bootstrap workflow.`,
+      `State release ${config.tag} does not exist; set bootstrap=true explicitly.`,
     );
   }
   return createRelease(octokit, config.target, config.tag, config.assetName);
@@ -110,7 +152,7 @@ async function getSaveRelease(
   if (existing) return { release: existing, created: false };
   failWithCode(
     "TRS_OBJECT_NOT_FOUND",
-    `State release ${context.config.tag} does not exist. Run restore first; only restore may bootstrap storage when TERRAFORM_BOOTSTRAP=true.`,
+    `State release ${context.config.tag} does not exist. Run restore first; only restore may bootstrap storage.`,
   );
 }
 
@@ -261,6 +303,16 @@ export async function uploadCurrentBundle(
       release.id,
       metadataName(config.assetName),
       data.metadata,
+      "application/json",
+    );
+  }
+  if (data.signature) {
+    uploaded.signature = await uploadAsset(
+      octokit,
+      config.target,
+      release.id,
+      signatureName(config.assetName),
+      data.signature,
       "application/json",
     );
   }
@@ -417,7 +469,7 @@ export async function assertUploadedBundle(
   const expectedData: Record<keyof BundleAssets, Buffer | undefined> = {
     state: expected.state,
     metadata: expected.metadata,
-    signature: undefined,
+    signature: expected.signature,
     manifest: expected.manifest,
   };
   for (const kind of ["state", "metadata", "signature", "manifest"] as const) {
@@ -450,6 +502,7 @@ export async function assertUploadedBundle(
 
 export async function save(context: StateManagerContext): Promise<void> {
   const { octokit, config } = context;
+  const encryption = encryptionConfig(context);
   if (!existsSync(config.statePath)) {
     failWithCode(
       "TRS_CONFIG_INVALID",
@@ -463,7 +516,7 @@ export async function save(context: StateManagerContext): Promise<void> {
       `State file is empty: ${config.statePath}`,
     );
   }
-  const data = plaintext;
+  const data = await encryptState(encryption, plaintext);
   const expected = readRestoreReceipt(config);
   const releaseResult = await getSaveRelease(context);
   let release = releaseResult.release;
@@ -498,9 +551,9 @@ export async function save(context: StateManagerContext): Promise<void> {
     );
   }
   // Validate the entire managed namespace before the first Release mutation.
-  // This also rejects v0.4 encrypted or signed objects with migration guidance.
   const loadedBundles = await loadCompleteReleaseBundles(context, assets);
   const previous = loadedBundles.get(config.assetName);
+  assertCurrentCanBeReplaced(context, previous);
 
   const body = managedReleaseBody(config.target, config.tag, config.assetName);
   if (!releaseResult.created && release.body !== body) {
@@ -523,19 +576,25 @@ export async function save(context: StateManagerContext): Promise<void> {
 
   const parentMarker = current ? marker(current) : null;
   const parentStoredSha256 = previous ? sha256(previous.stored) : null;
-  const currentData = createBundleData({
-    role: "current",
-    name: config.assetName,
-    stored: data,
-    plaintext,
-    encryptionMode: "none",
-    encryptionKeyFingerprint: null,
-    parentMarker,
-    parentStoredSha256,
-    sourceCommit: config.sourceCommit,
-    workflowRunId: config.workflowRunId,
-    actionVersion: process.env.GITHUB_ACTION_REF || "unknown",
-  });
+  const currentData = createBundleData(
+    {
+      role: "current",
+      name: config.assetName,
+      stored: data,
+      plaintext,
+      encryptionMode: encryption.mode,
+      encryptionKeyFingerprint:
+        encryption.mode === "age"
+          ? ageRecipientsFingerprint(encryption.recipients)
+          : null,
+      parentMarker,
+      parentStoredSha256,
+      sourceCommit: config.sourceCommit,
+      workflowRunId: config.workflowRunId,
+      actionVersion: process.env.GITHUB_ACTION_REF || "unknown",
+    },
+    context,
+  );
 
   const replacement: BundleAssets = {};
   let verified: LoadedStateBundle;

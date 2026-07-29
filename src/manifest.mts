@@ -296,6 +296,17 @@ export function terraformMetadata(
   };
 }
 
+export function ageRecipientsFingerprint(recipients: string[]): string {
+  if (recipients.length === 0) {
+    failWithCode(
+      "TRS_CONFIG_INVALID",
+      "Cannot fingerprint an empty age recipient set.",
+    );
+  }
+  const normalized = [...new Set(recipients)].sort();
+  return `sha256:${sha256(Buffer.from(`terraform-release-state/age-recipients/v1\n${normalized.join("\n")}\n`, "utf8"))}`;
+}
+
 export function createManifest(input: ManifestInput): StateManifest {
   return {
     manifest: "terraform-release-state",
