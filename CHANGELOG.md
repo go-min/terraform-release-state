@@ -2,6 +2,13 @@
 
 Release history for Terraform Release State.
 
+## [0.5.0](https://github.com/go-min/terraform-release-state/compare/v0.4.0...v0.5.0) (2026-07-29)
+
+
+### Features
+
+* establish zero-config state protocol ([#37](https://github.com/go-min/terraform-release-state/issues/37)) ([18890fa](https://github.com/go-min/terraform-release-state/commit/18890fa147b9eca75d8fd832063237d8344060c3))
+
 ## [0.4.0](https://github.com/go-min/terraform-release-state/compare/v0.3.1...v0.4.0) (2026-07-28)
 
 
