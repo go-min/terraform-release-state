@@ -161,6 +161,12 @@ describe("release lifecycle", () => {
     const cryptoMaterial = integrationWorkflow.indexOf(
       "Generate masked age and Ed25519 integration material",
     );
+    const cryptoLocalCleanup = integrationWorkflow.indexOf(
+      "Remove plaintext state before crypto bootstrap",
+    );
+    const cryptoBootstrap = integrationWorkflow.indexOf(
+      "Bootstrap disposable encrypted signed state storage",
+    );
     const cryptoSave = integrationWorkflow.indexOf(
       "Save encrypted signed state",
     );
@@ -185,6 +191,9 @@ describe("release lifecycle", () => {
         save < restore &&
         restore < cryptoPreflight &&
         cryptoPreflight < cryptoMaterial &&
+        cryptoMaterial < cryptoLocalCleanup &&
+        cryptoLocalCleanup < cryptoBootstrap &&
+        cryptoBootstrap < cryptoSave &&
         cryptoMaterial < cryptoSave &&
         cryptoSave < cryptoRestore &&
         cryptoRestore < cryptoReset &&
@@ -232,6 +241,14 @@ describe("release lifecycle", () => {
     assert.match(
       integrationWorkflow,
       /Restore encrypted signed state[\s\S]*age-identities:[\s\S]*verification-public-keys:[\s\S]*SIGNATURE_STATUS[\s\S]*test "\$SIGNATURE_STATUS" = verified/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /Remove plaintext state before crypto bootstrap[\s\S]*rm -f terraform\.tfstate[\s\S]*Bootstrap disposable encrypted signed state storage/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /EXPECTED_RELEASE_ID[\s\S]*Bootstrap can create the Release before failing to emit outputs[\s\S]*\.assets \| length == 0[\s\S]*bootstrap-fallback=true/,
     );
     assert.match(
       integrationWorkflow,

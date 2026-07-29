@@ -194,6 +194,9 @@ jobs:
           write("TRS_VERIFICATION_PUBLIC_KEY", verificationKey);
           NODE
 
+      - name: Remove plaintext state before crypto bootstrap
+        run: rm -f terraform.tfstate
+
       - name: Bootstrap disposable encrypted signed state storage
         id: crypto-bootstrap
         uses: ./
@@ -284,9 +287,29 @@ jobs:
             echo "::error::Cannot verify crypto tag ownership (HTTP $tag_status)."
             exit 1
           fi
-          if [ "$release_status" = 200 ] && [ "$(jq -r '.id' "$RUNNER_TEMP/crypto-cleanup-release.json")" != "$EXPECTED_RELEASE_ID" ]; then
-            echo "::error::Crypto Release identity changed; refusing cleanup."
-            exit 1
+          if [ "$release_status" = 200 ]; then
+            current_release_id=$(jq -r '.id' "$RUNNER_TEMP/crypto-cleanup-release.json")
+            if [ -n "$EXPECTED_RELEASE_ID" ]; then
+              if [ "$current_release_id" != "$EXPECTED_RELEASE_ID" ]; then
+                echo "::error::Crypto Release identity changed; refusing cleanup."
+                exit 1
+              fi
+            else
+              # Bootstrap can create the Release before failing to emit outputs.
+              # The claimed exact tag, deterministic fresh-release shape, and
+              # empty assets are the only safe fallback ownership proof.
+              jq -e --arg tag "$CRYPTO_STATE_TAG" '
+                .tag_name == $tag and
+                .name == "Terraform state" and
+                (.assets | length == 0) and
+                (.body | contains("**Service release for Terraform state; do not delete.**")) and
+                (.body | contains("**Release tag:** `" + $tag + "`"))
+              ' "$RUNNER_TEMP/crypto-cleanup-release.json" > /dev/null || {
+                echo "::error::Crypto Release has no bootstrap output and is not the expected empty managed Release; refusing cleanup."
+                exit 1
+              }
+              echo 'bootstrap-fallback=true' >> "$GITHUB_OUTPUT"
+            fi
           fi
           if [ "$tag_status" = 200 ] && [ "$(jq -r '.object.sha' "$RUNNER_TEMP/crypto-cleanup-tag.json")" != "$EXPECTED_TAG_SHA" ]; then
             echo "::error::Crypto tag target changed; refusing cleanup."
