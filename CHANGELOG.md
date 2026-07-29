@@ -2,6 +2,18 @@
 
 Release history for Terraform Release State.
 
+## [0.6.0](https://github.com/go-min/terraform-release-state/compare/v0.5.0...v0.6.0) (2026-07-29)
+
+
+### Features
+
+* restore configurable encrypted state protocol ([#39](https://github.com/go-min/terraform-release-state/issues/39)) ([4902400](https://github.com/go-min/terraform-release-state/commit/490240065b2ed7d16ce7912f962c3b00b648d82f))
+
+
+### Bug Fixes
+
+* clean failed crypto integration bootstrap ([#40](https://github.com/go-min/terraform-release-state/issues/40)) ([5b9378c](https://github.com/go-min/terraform-release-state/commit/5b9378c761bdd4b2da5f3449acf2dddec29af9be))
+
 ## [0.5.0](https://github.com/go-min/terraform-release-state/compare/v0.4.0...v0.5.0) (2026-07-29)
 
 
