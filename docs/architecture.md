@@ -1,116 +1,64 @@
 # Architecture
 
-Terraform Release State v0.5 is a Node.js 24 JavaScript action implementing one
-fixed same-repository state protocol. TypeScript `.mts` source is compiled and
-bundled into committed `dist/index.js`.
-
-## Boundary
+Terraform Release State v0.6 is a Node.js 24 JavaScript action. TypeScript
+`.mts` sources compile into the committed `dist/index.js` bundle.
 
 ```text
-protected workflow
-  restore -> verify remote -> repository-root terraform.tfstate
-          -> protected RUNNER_TEMP receipt
-  Terraform plan/apply (consumer-owned, configuration under terraform)
-  save    -> receipt CAS -> verified backup -> replace -> verify -> retain 20
-
-  import  -> verify remote -> structural scan -> safe fixed-path PR
-  reset all    -> namespace audit -> Release/tag deletion
-  reset backup -> verify -> safety backup -> CAS -> promote -> verify/rollback
+restore -> verify Release bundle -> local state + bound receipt
+save    -> receipt CAS -> verified safety backup -> replace -> verify -> retain
+import  -> verified remote state -> structural Terraform scan -> guarded PR
+reset   -> namespace audit -> delete all, or verify/CAS-promote exact backup
 ```
 
-The repository, Release tag, current asset, local path, backup retention,
-Terraform root, imports path, PR base, and PR branch are protocol constants.
-The action derives repository and provenance from GitHub context. The consumer
-owns Terraform commands, credentials, concurrency, approval, and workflow-level
-reset confirmation.
+## Configuration and storage
 
-## Runtime components
+The default namespace is the workflow repository, tag `terraform-state`, asset
+and local path `terraform.tfstate`, retention 20, encryption `none`, and
+`allow-unsigned` signatures. Namespace, path, retention, crypto, and import
+paths are explicit optional inputs. GitHub context derives source commit/run
+provenance; import PRs always target the workflow repository.
 
-| Component                       | Responsibility                                                |
-| ------------------------------- | ------------------------------------------------------------- |
-| `protocol.mts`                  | Fixed v0.5 constants and migration guidance                   |
-| `config.mts`                    | Three-input action boundary and GitHub environment derivation |
-| `receipt.mts`                   | Repository-bound restore receipt under `RUNNER_TEMP`          |
-| `github-api.mts`                | GitHub API pagination, bounded retries, and reconciliation    |
-| `manifest.mts`                  | Strict v1 schema and canonical serialization                  |
-| `state-bundle.mts`              | Legacy/v0.4 classification, verification, and migration gate  |
-| `state-manager.mts`             | Restore, save, optimistic consistency, and rollback           |
-| `backup-manager.mts`            | Verified backup creation, compensation, and retention         |
-| `reset.mts` / `reset-core.mts`  | Full reset and exact-backup promotion                         |
-| `terraform-config.mts`          | Structural import-target scanner                              |
-| `imports.mts` / `import-pr.mts` | Fixed proposal and protected PR branch refresh                |
-| `state-files.mts`               | Symlink-safe workspace reads and writes                       |
-| `errors.mts`                    | Stable machine-readable failures                              |
+Every manifest-v1 bundle has a state object and canonical manifest. Age current
+objects also have compatibility metadata; all backup manifests have metadata.
+Signed bundles also have a detached `*.manifest.sig.json`; upload order is
+state, metadata, signature, manifest. The manifest is the completion signal and
+records object identity, stored/plaintext digest and size, Terraform identity,
+parent marker/digest, encryption key fingerprint, and provenance. Canonical
+serializers strictly parse and reserialize manifest and signature bytes.
 
-## Storage layout
+## Integrity and concurrency
 
-Current state consists of:
+Restore records the exact observed remote marker in a mode-0600 receipt under
+`RUNNER_TEMP`. Save refuses a missing, changed, or newly appeared current
+marker. Before mutation it loads every managed bundle, verifies manifests, and
+requires decryption of encrypted current state. A signed current also requires
+a private signing key: neither a safety backup nor replacement may silently
+weaken protection.
 
-```text
-terraform.tfstate
-terraform.tfstate.manifest.json
-```
+New current and backup bundles are downloaded and cryptographically verified
+after upload. Current replacement is compensated with previously verified full
+bytes after partial failure. Manifest-last ordering makes incomplete upload
+non-authoritative. Once replacement verification succeeds, the new marker and
+`state-write-committed=true` are emitted before local receipt and retention.
+Maintenance failures fail the action but preserve a machine-readable recovery
+point.
 
-Each backup consists of:
+Exact-backup reset applies the same preflight to current and target, creates a
+verified safety backup, rechecks both markers, promotes with a new current
+manifest last, and fully rolls back partial replacement. It does not retain
+backups.
 
-```text
-terraform.tfstate.backup-<timestamp>-<run>-<uuid>
-terraform.tfstate.backup-<...>.metadata.json
-terraform.tfstate.backup-<...>.manifest.json
-```
+## Compatibility and import safety
 
-The compatibility metadata binds a backup to `terraform.tfstate` and its
-stored digest. The canonical manifest binds object role/name, stored and
-plaintext SHA-256 and size, Terraform version/serial/lineage when parseable,
-parent marker/digest, plaintext encryption mode, and GitHub provenance.
-Lineage is an infrastructure correlation identifier, not a secret or state
-value.
+v0.6 dual-reads legacy plaintext, v0.4 age/signed manifest bundles, and v0.5
+plaintext manifests in place. Age needs identities; signed manifests need a
+configured verification key, and `signature-policy=require` rejects unsigned
+objects. There is no implicit namespace relocation, downgrade, or companion
+deletion.
 
-Manifests use schema-owned field order, two-space JSON indentation, UTF-8, and
-one trailing line feed. Readers strictly validate and reserialize for byte
-equality. The manifest is uploaded last and is the flat-bundle completion
-signal.
-
-## Consistency and recovery
-
-Restore writes a receipt containing the exact observed state marker. It is
-bound to repository, Release tag, and asset name, stored as a regular mode-0600
-file, and cannot be supplied through action inputs. Save requires the receipt
-and fails if current state appeared, disappeared, or changed.
-
-Before mutation, save verifies every complete managed bundle and rejects any
-encrypted or signed object. It then verifies a new safety backup, repeats its
-current-bundle comparison, deletes/replaces current state, and downloads the
-replacement. Failure removes only observed replacement objects and restores
-the previously verified bytes with manifest last.
-
-Once replacement verification succeeds, the new marker is authoritative.
-Receipt update and retention are post-commit maintenance; their failure leaves
-machine-readable committed state and recovery guidance while failing the step.
-
-Exact-backup reset uses the same rules. It keeps the selected backup, creates a
-new safety backup when current exists, compares both observed bundles before
-replacement, promotes with a new current manifest, and fully rolls back partial
-replacement. Promotion deliberately skips retention.
-
-GitHub Release replacement is not a transactional Terraform backend and GitHub
-does not provide locking. Protected workflows must serialize all writers.
-
-## Import branch graph safety
-
-Import always targets `terraform/imports.generated.tf` on a fixed action-owned
-branch against `main`. The action compares complete recursive trees from the
-merge base and permits only that path.
-
-A stale branch is rebuilt with the latest-base-plus-generated tree and parents
-`[observed branch head, current base SHA]`. The observed head preserves
-fast-forward race safety; the second parent makes current base an ancestor so
-the pull request does not replay already-merged base changes. The ref update
-rechecks the expected SHA and uses `force: false`.
-
-## Compatibility
-
-v0.5 dual-reads legacy plaintext and unsigned plaintext manifest-v1 storage.
-Age ciphertext, age metadata, and detached signature assets produce
-`TRS_V04_MIGRATION_REQUIRED` before mutation. The action contains no age runtime
-or signing key path and performs no implicit downgrade or relocation.
+Import uses a tokenizer/parser rather than regex-only HCL guesses. It rejects
+symlink/realpath workspace escapes, scans relevant `.tf` files below
+`terraform-root`, suppresses declared targets, and does not read generated
+output in PR mode. Its action-owned branch refresh inspects the full merge-base
+diff, preserves latest base as an ancestor using a two-parent commit, and uses
+an expected-SHA non-force ref update.

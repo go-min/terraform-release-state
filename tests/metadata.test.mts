@@ -28,12 +28,39 @@ describe("action metadata", () => {
     assert.match(metadata, /main: dist\/index\.js/);
   });
 
-  it("exposes exactly the v0.5 three-input API", () => {
+  it("exposes the v0.6 default-first API", () => {
     const inputs = metadata.match(/^inputs:\n([\s\S]*?)^outputs:/m)?.[1] || "";
     assert.deepEqual(
       [...inputs.matchAll(/^ {2}([a-z0-9-]+):$/gm)].map((match) => match[1]),
-      ["operation", "github-token", "reset-target"],
+      [
+        "operation",
+        "github-token",
+        "state-repository",
+        "release-tag",
+        "state-asset",
+        "state-path",
+        "backup-retention",
+        "bootstrap",
+        "encryption",
+        "age-recipients",
+        "age-identities",
+        "signature-policy",
+        "signing-private-key",
+        "verification-public-keys",
+        "reset-target",
+        "terraform-root",
+        "imports-path",
+        "create-pr",
+        "pr-base",
+      ],
     );
+    assert.match(inputs, /release-tag:[\s\S]*default: terraform-state/);
+    assert.match(inputs, /state-asset:[\s\S]*default: terraform\.tfstate/);
+    assert.match(inputs, /state-path:[\s\S]*default: terraform\.tfstate/);
+    assert.match(inputs, /backup-retention:[\s\S]*default: "20"/);
+    assert.match(inputs, /encryption:[\s\S]*default: none/);
+    assert.match(inputs, /signature-policy:[\s\S]*default: allow-unsigned/);
+    assert.match(inputs, /create-pr:[\s\S]*default: "true"/);
     assert.match(inputs, /reset-target:[\s\S]*default: all/);
     assert.match(metadata, /remote-state-marker:/);
     assert.match(metadata, /import-pr-url:/);
@@ -116,23 +143,38 @@ describe("release lifecycle", () => {
     );
   });
 
-  it("guards and cleans the fixed live Release integration namespace", () => {
+  it("guards and cleans a disposable exact-candidate live Release namespace", () => {
     const fixture = integrationWorkflow.indexOf(
       "Run deterministic action-boundary integration",
     );
     const preflight = integrationWorkflow.indexOf(
-      "Assert fixed live namespace is absent",
+      "Assert disposable live namespace is absent",
     );
     const bootstrap = integrationWorkflow.indexOf(
-      "Bootstrap fixed state storage",
+      "Bootstrap disposable state storage",
     );
     const save = integrationWorkflow.indexOf("Save plaintext state");
     const restore = integrationWorkflow.indexOf("Restore saved state");
+    const cryptoPreflight = integrationWorkflow.indexOf(
+      "Assert disposable crypto namespace is absent",
+    );
+    const cryptoMaterial = integrationWorkflow.indexOf(
+      "Generate masked age and Ed25519 integration material",
+    );
+    const cryptoSave = integrationWorkflow.indexOf(
+      "Save encrypted signed state",
+    );
+    const cryptoRestore = integrationWorkflow.indexOf(
+      "Restore encrypted signed state",
+    );
+    const cryptoReset = integrationWorkflow.indexOf(
+      "Reset disposable encrypted signed integration storage",
+    );
     const reset = integrationWorkflow.indexOf(
-      "Reset fixed live integration storage",
+      "Reset disposable live integration storage",
     );
     const finalAssertion = integrationWorkflow.indexOf(
-      "Assert fixed live namespace was removed",
+      "Assert disposable live namespace was removed",
     );
 
     assert.ok(
@@ -141,6 +183,12 @@ describe("release lifecycle", () => {
         preflight < bootstrap &&
         bootstrap < save &&
         save < restore &&
+        restore < cryptoPreflight &&
+        cryptoPreflight < cryptoMaterial &&
+        cryptoMaterial < cryptoSave &&
+        cryptoSave < cryptoRestore &&
+        cryptoRestore < cryptoReset &&
+        cryptoReset < reset &&
         restore < reset &&
         reset < finalAssertion,
     );
@@ -151,11 +199,11 @@ describe("release lifecycle", () => {
     assert.match(integrationWorkflow, /permissions:\n\s+contents: read/);
     assert.match(
       integrationWorkflow,
-      /ref='refs\/tags\/terraform-state'[\s\S]*sha="\$EXPECTED_SHA"/,
+      /STATE_TAG: terraform-state-integration-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*ref="refs\/tags\/\$STATE_TAG"[\s\S]*sha="\$EXPECTED_SHA"/,
     );
     assert.match(
       integrationWorkflow,
-      /TERRAFORM_BOOTSTRAP: "true"[\s\S]*operation: restore/,
+      /operation: restore[\s\S]*release-tag: \$\{\{ env\.STATE_TAG \}\}[\s\S]*bootstrap: true/,
     );
     assert.match(
       integrationWorkflow,
@@ -167,7 +215,27 @@ describe("release lifecycle", () => {
     );
     assert.match(
       integrationWorkflow,
-      /release_status=\$\(api_status 'releases\/tags\/terraform-state'[\s\S]*test "\$release_status" = 404[\s\S]*test "\$tag_status" = 404/,
+      /release_status=\$\(api_status "releases\/tags\/\$STATE_TAG"[\s\S]*test "\$release_status" = 404[\s\S]*test "\$tag_status" = 404/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /CRYPTO_STATE_TAG: terraform-state-crypto-integration-[\s\S]*ref="refs\/tags\/\$CRYPTO_STATE_TAG"[\s\S]*sha="\$EXPECTED_SHA"/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /generateIdentity\(\)[\s\S]*generateKeyPairSync\("ed25519"\)[\s\S]*::add-mask::/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /Save encrypted signed state[\s\S]*encryption: age[\s\S]*age-recipients:[\s\S]*signing-private-key:[\s\S]*verification-public-keys:/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /Restore encrypted signed state[\s\S]*age-identities:[\s\S]*verification-public-keys:[\s\S]*SIGNATURE_STATUS[\s\S]*test "\$SIGNATURE_STATUS" = verified/,
+    );
+    assert.match(
+      integrationWorkflow,
+      /crypto_release_status[\s\S]*test "\$crypto_release_status" = 404[\s\S]*test "\$crypto_tag_status" = 404/,
     );
   });
 });

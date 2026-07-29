@@ -1,22 +1,85 @@
 name: Terraform Release State
-description: Store, restore, import, and reset same-repository Terraform state with a fixed GitHub Release protocol.
+description: Store, restore, import, and reset Terraform state with verified GitHub Release bundles.
 author: go-min
 inputs:
   operation:
     description: "State operation: restore, save, import, or reset."
     required: true
   github-token:
-    description: Token for the current repository; Contents read is sufficient for non-bootstrap restore, while save/reset and import PR management require their documented write permissions.
+    description: Token for Release storage and optional import PR changes.
     required: true
+  state-repository:
+    description: owner/name repository containing the state Release.
+    required: false
+    default: ""
+  release-tag:
+    description: GitHub Release tag used for state storage.
+    required: false
+    default: terraform-state
+  state-asset:
+    description: Current state asset filename.
+    required: false
+    default: terraform.tfstate
+  state-path:
+    description: Workspace-relative local state path for restore and save.
+    required: false
+    default: terraform.tfstate
+  backup-retention:
+    description: Number of complete backup bundles retained after save.
+    required: false
+    default: "20"
+  bootstrap:
+    description: Allow restore to create missing storage. Defaults to false; TERRAFORM_BOOTSTRAP=true is a deprecated fallback only when this input is omitted.
+    required: false
+  encryption:
+    description: "State encryption mode: none or age."
+    required: false
+    default: none
+  age-recipients:
+    description: Newline-delimited age1 recipients used only to save encryption=age.
+    required: false
+    default: ""
+  age-identities:
+    description: Secret newline-delimited AGE-SECRET-KEY-1 identities for encrypted reads and migrations.
+    required: false
+    default: ""
+  signature-policy:
+    description: "Manifest signature policy: allow-unsigned or require."
+    required: false
+    default: allow-unsigned
+  signing-private-key:
+    description: Secret unencrypted PKCS#8 PEM Ed25519 private key for save and signed backup promotion.
+    required: false
+    default: ""
+  verification-public-keys:
+    description: "Newline-delimited Ed25519 keys in ed25519:base64url format; multiple keys support rotation."
+    required: false
+    default: ""
   reset-target:
-    description: Exact terraform.tfstate.backup-* asset to promote, or all to delete state storage; meaningful only for reset.
+    description: Exact state-asset.backup-* asset to promote, or all to delete state storage; meaningful only for reset.
     required: false
     default: all
+  terraform-root:
+    description: Workspace-relative Terraform configuration root scanned for declared import targets.
+    required: false
+    default: .
+  imports-path:
+    description: Workspace-relative generated Terraform import proposal path.
+    required: false
+    default: ./imports.generated.tf
+  create-pr:
+    description: Create or update the action-owned import proposal pull request. Defaults to true for operation=import.
+    required: false
+    default: "true"
+  pr-base:
+    description: Base branch for the import proposal; defaults to the current repository default branch.
+    required: false
+    default: ""
 outputs:
   operation:
     description: Completed operation.
   bootstrapped:
-    description: Whether restore created missing storage under TERRAFORM_BOOTSTRAP=true.
+    description: Whether restore created missing storage under bootstrap=true (or the deprecated TERRAFORM_BOOTSTRAP fallback).
   release-id:
     description: GitHub Release ID.
   state-asset-id:
@@ -36,9 +99,9 @@ outputs:
   manifest-schema-version:
     description: Validated manifest schema version when a manifest is present.
   signature-status:
-    description: Signature compatibility status; v0.5 emits unsigned.
+    description: "Manifest signature status: verified or unsigned."
   signature-key-fingerprint:
-    description: Retained compatibility output; unset for v0.5 plaintext unsigned storage.
+    description: Fingerprint of the verified manifest signing key, when signed.
   stored-state-verification:
     description: Stored-byte verification result; verified, not-recorded, or not-performed.
   plaintext-state-verification:
@@ -62,7 +125,7 @@ outputs:
   reset-deleted-asset-count:
     description: Number of state assets deleted by reset-target all.
   reset-release-found:
-    description: Whether reset found the fixed terraform-state Release.
+    description: Whether reset found the configured state Release.
   reset-action:
     description: Reset result; deleted, promoted, or unchanged.
   reset-target:
@@ -70,7 +133,7 @@ outputs:
   reset-promoted-marker:
     description: Marker of the authoritative current state after backup promotion.
   import-pr-url:
-    description: URL of the fixed same-repository Terraform import proposal, when present.
+    description: URL of the same-repository Terraform import proposal, when present.
   import-candidate-count:
     description: Number of import blocks proposed after duplicate-target suppression.
   import-skipped-count:

@@ -15,6 +15,9 @@ jobs:
   integration:
     permissions:
       contents: write
+    env:
+      STATE_TAG: terraform-state-integration-${{ github.run_id }}-${{ github.run_attempt }}
+      CRYPTO_STATE_TAG: terraform-state-crypto-integration-${{ github.run_id }}-${{ github.run_attempt }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -50,7 +53,7 @@ jobs:
       - name: Run deterministic action-boundary integration
         run: node tests/integration-action.mjs
 
-      - name: Assert fixed live namespace is absent
+      - name: Assert disposable live namespace is absent
         id: preflight
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,15 +68,15 @@ jobs:
               "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
           }
 
-          release_status=$(api_status 'releases/tags/terraform-state' "$RUNNER_TEMP/preflight-release.json")
-          tag_status=$(api_status 'git/ref/tags/terraform-state' "$RUNNER_TEMP/preflight-tag.json")
+          release_status=$(api_status "releases/tags/$STATE_TAG" "$RUNNER_TEMP/preflight-release.json")
+          tag_status=$(api_status "git/ref/tags/$STATE_TAG" "$RUNNER_TEMP/preflight-tag.json")
           if [ "$release_status" != 404 ] || [ "$tag_status" != 404 ]; then
-            echo "::error::Fixed terraform-state namespace is not empty (release HTTP $release_status, tag HTTP $tag_status); refusing live integration without mutation."
+            echo "::error::Disposable integration namespace is not empty (release HTTP $release_status, tag HTTP $tag_status); refusing mutation."
             exit 1
           fi
           echo 'absent=true' >> "$GITHUB_OUTPUT"
 
-      - name: Atomically claim fixed integration tag
+      - name: Atomically claim disposable integration tag
         id: claim
         env:
           EXPECTED_SHA: ${{ github.sha }}
@@ -81,20 +84,20 @@ jobs:
         run: |
           response="$RUNNER_TEMP/claimed-tag.json"
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f ref='refs/tags/terraform-state' \
+            -f ref="refs/tags/$STATE_TAG" \
             -f sha="$EXPECTED_SHA" > "$response"
           echo 'claimed=true' >> "$GITHUB_OUTPUT"
           echo "tag-sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
-          jq -e --arg sha "$EXPECTED_SHA" '.ref == "refs/tags/terraform-state" and .object.sha == $sha' "$response" > /dev/null
+          jq -e --arg ref "refs/tags/$STATE_TAG" --arg sha "$EXPECTED_SHA" '.ref == $ref and .object.sha == $sha' "$response" > /dev/null
 
-      - name: Bootstrap fixed state storage
+      - name: Bootstrap disposable state storage
         id: bootstrap
-        env:
-          TERRAFORM_BOOTSTRAP: "true"
         uses: ./
         with:
           operation: restore
           github-token: ${{ github.token }}
+          release-tag: ${{ env.STATE_TAG }}
+          bootstrap: true
 
       - name: Verify bootstrap ownership
         env:
@@ -103,7 +106,7 @@ jobs:
         run: |
           test "${{ steps.bootstrap.outputs.bootstrapped }}" = true
           test "${{ steps.bootstrap.outputs.remote-state-marker }}" = absent
-          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/terraform-state" --jq '.id')
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STATE_TAG" --jq '.id')
           test "$release_id" = "$EXPECTED_RELEASE_ID"
 
       - name: Create small plaintext state
@@ -114,6 +117,7 @@ jobs:
         with:
           operation: save
           github-token: ${{ github.token }}
+          release-tag: ${{ env.STATE_TAG }}
 
       - name: Remove local state before restore
         run: rm -f terraform.tfstate
@@ -123,9 +127,197 @@ jobs:
         with:
           operation: restore
           github-token: ${{ github.token }}
+          release-tag: ${{ env.STATE_TAG }}
 
       - name: Verify restored plaintext state
         run: jq -e '.version == 4 and .serial == 1 and .lineage == "release-candidate" and .resources == []' terraform.tfstate > /dev/null
+
+      - name: Assert disposable crypto namespace is absent
+        id: crypto-preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api_status() {
+            local endpoint=$1
+            local output=$2
+            curl --silent --show-error --output "$output" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
+          }
+
+          release_status=$(api_status "releases/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/crypto-preflight-release.json")
+          tag_status=$(api_status "git/ref/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/crypto-preflight-tag.json")
+          if [ "$release_status" != 404 ] || [ "$tag_status" != 404 ]; then
+            echo "::error::Disposable crypto namespace is not empty (release HTTP $release_status, tag HTTP $tag_status); refusing mutation."
+            exit 1
+          fi
+
+      - name: Atomically claim disposable crypto integration tag
+        id: crypto-claim
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          response="$RUNNER_TEMP/claimed-crypto-tag.json"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$CRYPTO_STATE_TAG" \
+            -f sha="$EXPECTED_SHA" > "$response"
+          echo 'claimed=true' >> "$GITHUB_OUTPUT"
+          echo "tag-sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          jq -e --arg ref "refs/tags/$CRYPTO_STATE_TAG" --arg sha "$EXPECTED_SHA" '.ref == $ref and .object.sha == $sha' "$response" > /dev/null
+
+      - name: Generate masked age and Ed25519 integration material
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { generateKeyPairSync } from "node:crypto";
+          import { generateIdentity, identityToRecipient } from "age-encryption";
+
+          const identity = await generateIdentity();
+          const recipient = await identityToRecipient(identity);
+          const pair = generateKeyPairSync("ed25519");
+          const privateKey = pair.privateKey.export({ format: "pem", type: "pkcs8" });
+          const publicKey = pair.publicKey.export({ format: "jwk" }).x;
+          const verificationKey = `ed25519:${publicKey}`;
+          for (const value of [identity, recipient, privateKey, verificationKey]) {
+            for (const line of String(value).split("\n")) {
+              if (line) console.log(`::add-mask::${line}`);
+            }
+          }
+          const env = process.env.GITHUB_ENV;
+          const write = (name, value) => appendFileSync(env, `${name}<<TRS_CRYPTO_EOF\n${value}\nTRS_CRYPTO_EOF\n`);
+          write("TRS_AGE_IDENTITY", identity);
+          write("TRS_AGE_RECIPIENT", recipient);
+          write("TRS_SIGNING_PRIVATE_KEY", privateKey);
+          write("TRS_VERIFICATION_PUBLIC_KEY", verificationKey);
+          NODE
+
+      - name: Bootstrap disposable encrypted signed state storage
+        id: crypto-bootstrap
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          release-tag: ${{ env.CRYPTO_STATE_TAG }}
+          encryption: age
+          age-identities: ${{ env.TRS_AGE_IDENTITY }}
+          verification-public-keys: ${{ env.TRS_VERIFICATION_PUBLIC_KEY }}
+          bootstrap: true
+
+      - name: Verify crypto bootstrap ownership
+        env:
+          EXPECTED_RELEASE_ID: ${{ steps.crypto-bootstrap.outputs.release-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${{ steps.crypto-bootstrap.outputs.bootstrapped }}" = true
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$CRYPTO_STATE_TAG" --jq '.id')
+          test "$release_id" = "$EXPECTED_RELEASE_ID"
+
+      - name: Create small encrypted signed state
+        run: printf '%s\n' '{"version":4,"terraform_version":"integration","serial":2,"lineage":"release-candidate-crypto","resources":[]}' > terraform.tfstate
+
+      - name: Save encrypted signed state
+        uses: ./
+        with:
+          operation: save
+          github-token: ${{ github.token }}
+          release-tag: ${{ env.CRYPTO_STATE_TAG }}
+          encryption: age
+          age-recipients: ${{ env.TRS_AGE_RECIPIENT }}
+          age-identities: ${{ env.TRS_AGE_IDENTITY }}
+          signing-private-key: ${{ env.TRS_SIGNING_PRIVATE_KEY }}
+          verification-public-keys: ${{ env.TRS_VERIFICATION_PUBLIC_KEY }}
+
+      - name: Remove local encrypted signed state before restore
+        run: rm -f terraform.tfstate
+
+      - name: Restore encrypted signed state
+        id: crypto-restore
+        uses: ./
+        with:
+          operation: restore
+          github-token: ${{ github.token }}
+          release-tag: ${{ env.CRYPTO_STATE_TAG }}
+          encryption: age
+          age-identities: ${{ env.TRS_AGE_IDENTITY }}
+          verification-public-keys: ${{ env.TRS_VERIFICATION_PUBLIC_KEY }}
+
+      - name: Verify restored encrypted signed state
+        env:
+          STORED_DIGEST: ${{ steps.crypto-restore.outputs.stored-state-sha256 }}
+          PLAINTEXT_DIGEST: ${{ steps.crypto-restore.outputs.plaintext-state-sha256 }}
+          SIGNATURE_STATUS: ${{ steps.crypto-restore.outputs.signature-status }}
+        run: |
+          jq -e '.version == 4 and .serial == 2 and .lineage == "release-candidate-crypto" and .resources == []' terraform.tfstate > /dev/null
+          test "$SIGNATURE_STATUS" = verified
+          test -n "$STORED_DIGEST"
+          test -n "$PLAINTEXT_DIGEST"
+          test "$STORED_DIGEST" != "$PLAINTEXT_DIGEST"
+
+      - name: Guard crypto cleanup ownership
+        id: crypto-cleanup-guard
+        if: ${{ always() && steps.crypto-claim.outputs.claimed == 'true' }}
+        env:
+          EXPECTED_RELEASE_ID: ${{ steps.crypto-bootstrap.outputs.release-id }}
+          EXPECTED_TAG_SHA: ${{ steps.crypto-claim.outputs.tag-sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api_status() {
+            local endpoint=$1
+            local output=$2
+            curl --silent --show-error --output "$output" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
+          }
+
+          release_status=$(api_status "releases/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/crypto-cleanup-release.json")
+          tag_status=$(api_status "git/ref/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/crypto-cleanup-tag.json")
+          if [ "$release_status" != 200 ] && [ "$release_status" != 404 ]; then
+            echo "::error::Cannot verify crypto Release ownership (HTTP $release_status)."
+            exit 1
+          fi
+          if [ "$tag_status" != 200 ] && [ "$tag_status" != 404 ]; then
+            echo "::error::Cannot verify crypto tag ownership (HTTP $tag_status)."
+            exit 1
+          fi
+          if [ "$release_status" = 200 ] && [ "$(jq -r '.id' "$RUNNER_TEMP/crypto-cleanup-release.json")" != "$EXPECTED_RELEASE_ID" ]; then
+            echo "::error::Crypto Release identity changed; refusing cleanup."
+            exit 1
+          fi
+          if [ "$tag_status" = 200 ] && [ "$(jq -r '.object.sha' "$RUNNER_TEMP/crypto-cleanup-tag.json")" != "$EXPECTED_TAG_SHA" ]; then
+            echo "::error::Crypto tag target changed; refusing cleanup."
+            exit 1
+          fi
+          echo 'owned=true' >> "$GITHUB_OUTPUT"
+
+      - name: Reset disposable encrypted signed integration storage
+        id: reset-crypto-live
+        if: ${{ always() && steps.crypto-cleanup-guard.outputs.owned == 'true' }}
+        uses: ./
+        with:
+          operation: reset
+          github-token: ${{ github.token }}
+          release-tag: ${{ env.CRYPTO_STATE_TAG }}
+          reset-target: all
+          encryption: age
+          age-identities: ${{ env.TRS_AGE_IDENTITY }}
+          verification-public-keys: ${{ env.TRS_VERIFICATION_PUBLIC_KEY }}
+
+      - name: Retry guarded crypto cleanup after a reset failure
+        if: ${{ always() && steps.crypto-cleanup-guard.outputs.owned == 'true' && steps.reset-crypto-live.outcome != 'success' }}
+        uses: ./
+        with:
+          operation: reset
+          github-token: ${{ github.token }}
+          release-tag: ${{ env.CRYPTO_STATE_TAG }}
+          reset-target: all
+          encryption: age
+          age-identities: ${{ env.TRS_AGE_IDENTITY }}
+          verification-public-keys: ${{ env.TRS_VERIFICATION_PUBLIC_KEY }}
 
       - name: Guard cleanup ownership
         id: cleanup-guard
@@ -147,8 +339,8 @@ jobs:
 
           release_json="$RUNNER_TEMP/cleanup-release.json"
           tag_json="$RUNNER_TEMP/cleanup-tag.json"
-          release_status=$(api_status 'releases/tags/terraform-state' "$release_json")
-          tag_status=$(api_status 'git/ref/tags/terraform-state' "$tag_json")
+          release_status=$(api_status "releases/tags/$STATE_TAG" "$release_json")
+          tag_status=$(api_status "git/ref/tags/$STATE_TAG" "$tag_json")
 
           if [ "$release_status" != 200 ] && [ "$release_status" != 404 ]; then
             echo "::error::Cannot verify integration Release ownership (HTTP $release_status)."
@@ -174,7 +366,7 @@ jobs:
           fi
           echo 'owned=true' >> "$GITHUB_OUTPUT"
 
-      - name: Reset fixed live integration storage
+      - name: Reset disposable live integration storage
         id: reset-live
         if: ${{ always() && steps.cleanup-guard.outputs.owned == 'true' }}
         uses: ./
@@ -182,6 +374,7 @@ jobs:
           operation: reset
           github-token: ${{ github.token }}
           reset-target: all
+          release-tag: ${{ env.STATE_TAG }}
 
       - name: Retry guarded cleanup after a reset failure
         if: ${{ always() && steps.cleanup-guard.outputs.owned == 'true' && steps.reset-live.outcome != 'success' }}
@@ -190,9 +383,10 @@ jobs:
           operation: reset
           github-token: ${{ github.token }}
           reset-target: all
+          release-tag: ${{ env.STATE_TAG }}
 
-      - name: Assert fixed live namespace was removed
-        if: ${{ always() && steps.claim.outputs.claimed == 'true' }}
+      - name: Assert disposable live namespace was removed
+        if: ${{ always() && (steps.claim.outputs.claimed == 'true' || steps.crypto-claim.outputs.claimed == 'true') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -206,7 +400,11 @@ jobs:
               "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint"
           }
 
-          release_status=$(api_status 'releases/tags/terraform-state' "$RUNNER_TEMP/final-release.json")
-          tag_status=$(api_status 'git/ref/tags/terraform-state' "$RUNNER_TEMP/final-tag.json")
+          release_status=$(api_status "releases/tags/$STATE_TAG" "$RUNNER_TEMP/final-release.json")
+          tag_status=$(api_status "git/ref/tags/$STATE_TAG" "$RUNNER_TEMP/final-tag.json")
           test "$release_status" = 404
           test "$tag_status" = 404
+          crypto_release_status=$(api_status "releases/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/final-crypto-release.json")
+          crypto_tag_status=$(api_status "git/ref/tags/$CRYPTO_STATE_TAG" "$RUNNER_TEMP/final-crypto-tag.json")
+          test "$crypto_release_status" = 404
+          test "$crypto_tag_status" = 404

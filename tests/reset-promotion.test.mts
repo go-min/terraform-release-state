@@ -352,7 +352,7 @@ test("corrupt selected backup fails before any mutation", async () => {
   }
 });
 
-test("signed selected backup fails with migration guidance before mutation", async () => {
+test("invalid signed selected backup fails before mutation", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "trs-promote-signed-"));
   const api = promotionApi({
     current: Buffer.from("current"),
@@ -367,7 +367,7 @@ test("signed selected backup fails with migration guidance before mutation", asy
       (error: unknown) =>
         error instanceof Error &&
         "code" in error &&
-        error.code === "TRS_V04_MIGRATION_REQUIRED",
+        error.code === "TRS_SIGNATURE_INVALID",
     );
     assert.equal(api.writes(), 0);
   } finally {

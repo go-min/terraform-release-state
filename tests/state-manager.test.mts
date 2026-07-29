@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { ActionConfig } from "../src/types.mts";
+import { generateIdentity, identityToRecipient } from "age-encryption";
 
 const { readStoredState, restore, save } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
@@ -21,6 +22,10 @@ const { marker } = await import(
 const { writeRestoreReceipt } = await import(
   // @ts-expect-error This source module is compiled into the temporary native-test build.
   "../.test-build/src/receipt.mjs"
+);
+const { publicKeyInputFromPrivateKey } = await import(
+  // @ts-expect-error This source module is compiled into the temporary native-test build.
+  "../.test-build/src/signing.mjs"
 );
 
 function digest(data: Buffer): string {
@@ -225,7 +230,7 @@ test("restore fails closed on absent storage without bootstrap", async () => {
   try {
     await assert.rejects(
       restore({ octokit, config: configFor(workspace) }),
-      /TERRAFORM_BOOTSTRAP=true/,
+      /bootstrap=true/,
     );
     assert.equal(creates, 0);
   } finally {
@@ -381,7 +386,7 @@ test("partial replacement restores a complete prior v0.4 plaintext bundle", asyn
   }
 });
 
-test("signed and encrypted storage fail before Release mutation", async () => {
+test("incomplete signed and encrypted storage fails before Release mutation", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "trs-migration-"));
   const state = Buffer.from("age-encryption.org/v1\nencrypted");
   const signature = Buffer.from("signature");
@@ -401,8 +406,7 @@ test("signed and encrypted storage fail before Release mutation", async () => {
       (error: unknown) =>
         error instanceof Error &&
         "code" in error &&
-        error.code === "TRS_V04_MIGRATION_REQUIRED" &&
-        /v0\.4\.0/.test(error.message),
+        error.code === "TRS_OBJECT_SET_INCOMPLETE",
     );
     assert.equal(api.writeCalls(), 0);
   } finally {
@@ -434,6 +438,79 @@ test("successful plaintext save preserves digest meanings and lifecycle outputs"
     assert.equal(outputValue(outputs, "state-phase"), "complete");
     assert.equal(outputValue(outputs, "state-status"), "success");
     assert.notEqual(outputValue(outputs, "remote-state-marker"), "absent");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("save migrates a v0.5 plaintext manifest to an age-encrypted signed bundle", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "trs-v05-migration-"));
+  const outputPath = join(workspace, "outputs.txt");
+  const previous = Buffer.from(
+    '{"terraform_version":"1.9.0","serial":1,"lineage":"v05"}',
+  );
+  const next = Buffer.from(
+    '{"terraform_version":"1.9.0","serial":2,"lineage":"v06"}',
+  );
+  const oldBundle = createBundleData({
+    role: "current",
+    name: "terraform.tfstate",
+    stored: previous,
+    plaintext: previous,
+    encryptionMode: "none",
+    encryptionKeyFingerprint: null,
+    parentMarker: null,
+    parentStoredSha256: null,
+    sourceCommit: "old",
+    workflowRunId: "old-run",
+    actionVersion: "v0.5.0",
+  });
+  const identity = await generateIdentity();
+  const recipient = await identityToRecipient(identity);
+  const pair = generateKeyPairSync("ed25519");
+  const privateKey = pair.privateKey.export({
+    format: "pem",
+    type: "pkcs8",
+  }) as string;
+  const publicKey = publicKeyInputFromPrivateKey(privateKey);
+  writeFileSync(join(workspace, "terraform.tfstate"), next, { mode: 0o600 });
+  writeFileSync(outputPath, "", { mode: 0o600 });
+  const api = stateApi(previous, {
+    companions: [
+      { name: "terraform.tfstate.manifest.json", data: oldBundle.manifest },
+    ],
+  });
+  const config = configFor(workspace, {
+    operation: "save",
+    encryption: {
+      mode: "age",
+      recipients: [recipient],
+      identities: [identity],
+    },
+    signing: {
+      policy: "allow-unsigned",
+      privateKeyPem: privateKey,
+      verificationKeys: [publicKey],
+    },
+  });
+  authorizeSave(config, api.assets()[0]);
+  try {
+    await withOutputFile(outputPath, () =>
+      save({ octokit: api.octokit, config }),
+    );
+    const current = new Map(
+      api.assets().map((asset) => [asset.name, api.payloads.get(asset.id)]),
+    );
+    assert.ok(current.has("terraform.tfstate.metadata.json"));
+    assert.ok(current.has("terraform.tfstate.manifest.sig.json"));
+    assert.notDeepEqual(current.get("terraform.tfstate"), next);
+    const outputs = readFileSync(outputPath, "utf8");
+    assert.notEqual(
+      outputValue(outputs, "stored-state-sha256"),
+      outputValue(outputs, "plaintext-state-sha256"),
+    );
+    assert.equal(outputValue(outputs, "state-sha256"), digest(next));
+    assert.equal(outputValue(outputs, "signature-status"), "verified");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

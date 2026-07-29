@@ -100,6 +100,36 @@ async function promoteBackup(
   const previous = loaded.get(config.assetName);
   const observedCurrent = bundleAssets(assets, config.assetName);
   const observedTarget = bundleAssets(assets, config.resetTarget);
+  if (!selected.plaintext) {
+    failWithCode(
+      "TRS_DECRYPTION_FAILED",
+      `Backup ${config.resetTarget} must be decrypted and plaintext-verified before promotion.`,
+    );
+  }
+  if (
+    selected.signature.status === "verified" &&
+    !config.signing?.privateKeyPem
+  ) {
+    failWithCode(
+      "TRS_SIGNATURE_REQUIRED",
+      `Promoting signed backup ${config.resetTarget} requires signing-private-key to sign the new current manifest.`,
+    );
+  }
+  if (
+    previous?.signature.status === "verified" &&
+    !config.signing?.privateKeyPem
+  ) {
+    failWithCode(
+      "TRS_SIGNATURE_REQUIRED",
+      "signing-private-key is required to preserve the current signed state in the reset safety backup.",
+    );
+  }
+  if (previous?.manifest?.encryption.mode === "age" && !previous.plaintext) {
+    failWithCode(
+      "TRS_DECRYPTION_FAILED",
+      "age-identities is required to verify and preserve the current encrypted state in the reset safety backup.",
+    );
+  }
   let safetyBackup = "";
   if (previous?.assets.state) {
     safetyBackup = await createBackup(
@@ -125,19 +155,23 @@ async function promoteBackup(
   const parentMarker = previous?.assets.state
     ? marker(previous.assets.state)
     : null;
-  const currentData = createBundleData({
-    role: "current",
-    name: config.assetName,
-    stored: selected.stored,
-    plaintext: selected.plaintext,
-    encryptionMode: "none",
-    encryptionKeyFingerprint: null,
-    parentMarker,
-    parentStoredSha256: previous ? sha256(previous.stored) : null,
-    sourceCommit: config.sourceCommit,
-    workflowRunId: config.workflowRunId,
-    actionVersion: actionVersion(),
-  });
+  const selectedEncryption = selected.manifest?.encryption;
+  const currentData = createBundleData(
+    {
+      role: "current",
+      name: config.assetName,
+      stored: selected.stored,
+      plaintext: selected.plaintext,
+      encryptionMode: selectedEncryption?.mode || "none",
+      encryptionKeyFingerprint: selectedEncryption?.key_fingerprint || null,
+      parentMarker,
+      parentStoredSha256: previous ? sha256(previous.stored) : null,
+      sourceCommit: config.sourceCommit,
+      workflowRunId: config.workflowRunId,
+      actionVersion: actionVersion(),
+    },
+    context,
+  );
 
   const replacement: BundleAssets = {};
   let authoritative: LoadedStateBundle;
