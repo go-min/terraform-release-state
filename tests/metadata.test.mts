@@ -21,6 +21,7 @@ const releasePleaseConfig = readFileSync("release-please-config.json", "utf8");
 const prettierIgnore = readFileSync(".prettierignore", "utf8");
 const markdownlintConfig = readFileSync(".markdownlint-cli2.yaml", "utf8");
 const commitlintConfig = readFileSync("commitlint.config.mjs", "utf8");
+const dependabotConfig = readFileSync(".github/dependabot.yml", "utf8");
 
 describe("action metadata", () => {
   it("uses the Node 24 runtime and compiled bundle", () => {
@@ -253,6 +254,19 @@ describe("release lifecycle", () => {
     assert.match(
       integrationWorkflow,
       /crypto_release_status[\s\S]*test "\$crypto_release_status" = 404[\s\S]*test "\$crypto_tag_status" = 404/,
+    );
+  });
+});
+
+describe("Dependabot policy", () => {
+  it("groups each supported ecosystem into one weekly update pull request", () => {
+    assert.match(
+      dependabotConfig,
+      /package-ecosystem: npm[\s\S]*groups:[\s\S]*all-npm-dependencies:[\s\S]*patterns:[\s\S]*- "\*"/,
+    );
+    assert.match(
+      dependabotConfig,
+      /package-ecosystem: github-actions[\s\S]*groups:[\s\S]*all-github-actions:[\s\S]*patterns:[\s\S]*- "\*"/,
     );
   });
 });
