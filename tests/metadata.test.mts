@@ -22,6 +22,7 @@ const prettierIgnore = readFileSync(".prettierignore", "utf8");
 const markdownlintConfig = readFileSync(".markdownlint-cli2.yaml", "utf8");
 const commitlintConfig = readFileSync("commitlint.config.mjs", "utf8");
 const dependabotConfig = readFileSync(".github/dependabot.yml", "utf8");
+const pnpmWorkspaceConfig = readFileSync("pnpm-workspace.yaml", "utf8");
 
 describe("action metadata", () => {
   it("uses the Node 24 runtime and compiled bundle", () => {
@@ -268,5 +269,9 @@ describe("Dependabot policy", () => {
       dependabotConfig,
       /package-ecosystem: github-actions[\s\S]*groups:[\s\S]*all-github-actions:[\s\S]*patterns:[\s\S]*- "\*"/,
     );
+  });
+
+  it("pins the audited fast-uri transitive dependency to its patched version", () => {
+    assert.match(pnpmWorkspaceConfig, /^\s+fast-uri: 3\.1\.5$/m);
   });
 });
