@@ -9,5 +9,6 @@ strictDepBuilds: true
 allowBuilds: {}
 overrides:
   es-toolkit: 1.49.0
+  fast-uri: 3.1.5
   js-yaml: 5.2.2
   undici: 6.27.0
